@@ -1,7 +1,7 @@
 {
   "name": "ifc-data-explorer",
   "private": true,
-  "version": "1.0.1",
+  "version": "22/06/26-1",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
