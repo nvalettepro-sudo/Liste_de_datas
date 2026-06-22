@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useStore } from '../store/useStore'
 import { version } from '../../package.json'
 
@@ -19,6 +20,22 @@ export function TopBar() {
   const clearGlobalSearch = useStore((s) => s.clearGlobalSearch)
   const isSearching = useStore((s) => s.isSearching)
   const loadFile = useStore((s) => s.loadFile)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    const q = searchQuery.trim()
+    if (!q) {
+      clearGlobalSearch()
+      return
+    }
+    debounceRef.current = setTimeout(() => {
+      triggerGlobalSearch()
+    }, 350)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [searchQuery])
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -71,15 +88,9 @@ export function TopBar() {
         <div className="relative">
           <input
             type="text"
-            placeholder="Rechercher dans tous les types… (Entrée)"
+            placeholder="Rechercher un Pset, propriété, valeur…"
             value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value)
-              if (e.target.value.trim() === '') clearGlobalSearch()
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') triggerGlobalSearch()
-            }}
+            onChange={(e) => setSearchQuery(e.target.value)}
             className="w-80 h-8 px-3 pr-8 text-sm bg-gray-800 border border-gray-700 text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
           />
           {isSearching ? (
