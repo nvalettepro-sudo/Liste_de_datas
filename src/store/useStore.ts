@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type {
   EntityTypeSummary,
   AggregatedEntityData,
+  GlobalSearchResult,
   WorkerOutMessage,
 } from '../lib/types'
 
@@ -16,10 +17,14 @@ interface AppState {
   selectedType: string | null
   aggregatedData: AggregatedEntityData | null
   searchQuery: string
+  globalSearchResults: GlobalSearchResult[] | null
+  isSearching: boolean
 
   loadFile: (file: File) => void
   selectType: (type: string) => void
   setSearchQuery: (q: string) => void
+  triggerGlobalSearch: () => void
+  clearGlobalSearch: () => void
   clearError: () => void
 }
 
@@ -55,8 +60,10 @@ function getOrCreateWorker(set: (s: Partial<AppState>) => void) {
         loadProgress: 100,
         loadPhase: '',
       })
+    } else if (msg.type === 'searchResults') {
+      set({ globalSearchResults: msg.results, isSearching: false })
     } else if (msg.type === 'error') {
-      set({ error: msg.message, isLoading: false })
+      set({ error: msg.message, isLoading: false, isSearching: false })
     }
   }
   worker.onerror = (e) => {
@@ -65,7 +72,7 @@ function getOrCreateWorker(set: (s: Partial<AppState>) => void) {
   return worker
 }
 
-export const useStore = create<AppState>((set, _get) => ({
+export const useStore = create<AppState>((set, get) => ({
   fileName: null,
   ifcVersion: null,
   isLoading: false,
@@ -76,6 +83,8 @@ export const useStore = create<AppState>((set, _get) => ({
   selectedType: null,
   aggregatedData: null,
   searchQuery: '',
+  globalSearchResults: null,
+  isSearching: false,
 
   loadFile: (file: File) => {
     set({
@@ -108,6 +117,18 @@ export const useStore = create<AppState>((set, _get) => ({
 
   setSearchQuery: (q: string) => {
     set({ searchQuery: q })
+  },
+
+  triggerGlobalSearch: () => {
+    const { searchQuery } = get()
+    const q = searchQuery.trim()
+    if (!q || !worker) return
+    set({ isSearching: true, globalSearchResults: null })
+    worker.postMessage({ type: 'search', query: q })
+  },
+
+  clearGlobalSearch: () => {
+    set({ globalSearchResults: null, isSearching: false })
   },
 
   clearError: () => set({ error: null }),

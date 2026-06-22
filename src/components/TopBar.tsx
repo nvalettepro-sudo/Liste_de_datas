@@ -15,6 +15,9 @@ export function TopBar() {
   const loadPhase = useStore((s) => s.loadPhase)
   const searchQuery = useStore((s) => s.searchQuery)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
+  const triggerGlobalSearch = useStore((s) => s.triggerGlobalSearch)
+  const clearGlobalSearch = useStore((s) => s.clearGlobalSearch)
+  const isSearching = useStore((s) => s.isSearching)
   const loadFile = useStore((s) => s.loadFile)
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -68,24 +71,41 @@ export function TopBar() {
         <div className="relative">
           <input
             type="text"
-            placeholder="Rechercher un Pset, une propriété…"
+            placeholder="Rechercher dans tous les types… (Entrée)"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-72 h-8 px-3 pr-8 text-sm bg-gray-800 border border-gray-700 text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
+            onChange={(e) => {
+              setSearchQuery(e.target.value)
+              if (e.target.value.trim() === '') clearGlobalSearch()
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') triggerGlobalSearch()
+            }}
+            className="w-80 h-8 px-3 pr-8 text-sm bg-gray-800 border border-gray-700 text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
           />
-          <svg
-            className="absolute right-2.5 top-2 w-4 h-4 text-gray-600"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
+          {isSearching ? (
+            <span className="absolute right-2.5 top-2 w-4 h-4 text-blue-400 text-xs animate-pulse">…</span>
+          ) : searchQuery ? (
+            <button
+              onClick={() => { setSearchQuery(''); clearGlobalSearch() }}
+              className="absolute right-2.5 top-1.5 w-4 h-4 text-gray-500 hover:text-gray-300 text-sm leading-none"
+            >
+              ✕
+            </button>
+          ) : (
+            <svg
+              className="absolute right-2.5 top-2 w-4 h-4 text-gray-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+              />
+            </svg>
+          )}
         </div>
       </div>
 

@@ -62,13 +62,29 @@ export interface AggregatedEntityData {
   customPsets: AggregatedPset[]
 }
 
+export interface GlobalSearchMatch {
+  matchType: 'pset' | 'property' | 'value'
+  psetName: string
+  propertyName?: string
+  occurrences: number
+}
+
+export interface GlobalSearchResult {
+  entityType: string
+  totalCount: number
+  matchingCount: number
+  matches: GlobalSearchMatch[]
+}
+
 export type WorkerInMessage =
   | { type: 'init'; wasmPath: string }
   | { type: 'load'; buffer: ArrayBuffer }
   | { type: 'select'; entityType: string }
+  | { type: 'search'; query: string }
 
 export type WorkerOutMessage =
   | { type: 'progress'; percent: number; phase: string }
   | { type: 'ready'; entityTypes: EntityTypeSummary[]; ifcVersion: string }
   | { type: 'aggregated'; data: AggregatedEntityData }
+  | { type: 'searchResults'; query: string; results: GlobalSearchResult[] }
   | { type: 'error'; message: string }

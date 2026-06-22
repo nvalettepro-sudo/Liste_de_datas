@@ -8,6 +8,8 @@ import type {
   AggregatedPset,
   ValueAggregate,
   TextValueCount,
+  GlobalSearchMatch,
+  GlobalSearchResult,
   WorkerInMessage,
   WorkerOutMessage,
 } from '../lib/types'
@@ -237,6 +239,76 @@ function buildNumericAggregate(
   return { kind: 'numeric', min: range.min, max: range.max, presentCount, totalCount }
 }
 
+function searchGlobal(query: string) {
+  if (!api || modelId < 0) return
+  const q = query.toLowerCase()
+  const results: GlobalSearchResult[] = []
+
+  for (const [typeName, typeCode] of typeCodeMap.entries()) {
+    const lineIds = api.GetLineIDsWithType(modelId, typeCode)
+    const total = lineIds.size()
+    if (total === 0) continue
+
+    const matchSet = new Set<number>()
+    const matches: GlobalSearchMatch[] = []
+    const psetMatchCount = new Map<string, number>()
+    const propMatchCount = new Map<string, number>()
+    const valMatchCount = new Map<string, number>()
+
+    for (let i = 0; i < total; i++) {
+      const expressId = lineIds.get(i)
+      const psets = entityPsetMap.get(expressId) ?? []
+      let entityMatched = false
+
+      for (const pset of psets) {
+        const psetNameMatch = pset.name.toLowerCase().includes(q)
+
+        for (const prop of pset.properties) {
+          const propNameMatch = prop.name.toLowerCase().includes(q)
+          const valStr = prop.value !== null ? String(prop.value).toLowerCase() : ''
+          const valMatch = valStr.includes(q)
+
+          if (psetNameMatch) {
+            psetMatchCount.set(pset.name, (psetMatchCount.get(pset.name) ?? 0) + 1)
+            entityMatched = true
+          }
+          if (propNameMatch) {
+            propMatchCount.set(`${pset.name}::${prop.name}`, (propMatchCount.get(`${pset.name}::${prop.name}`) ?? 0) + 1)
+            entityMatched = true
+          }
+          if (valMatch) {
+            valMatchCount.set(`${pset.name}::${prop.name}`, (valMatchCount.get(`${pset.name}::${prop.name}`) ?? 0) + 1)
+            entityMatched = true
+          }
+        }
+      }
+
+      if (entityMatched) matchSet.add(expressId)
+    }
+
+    if (matchSet.size === 0) continue
+
+    for (const [psetName, count] of psetMatchCount.entries()) {
+      matches.push({ matchType: 'pset', psetName, occurrences: count })
+    }
+    for (const [key, count] of propMatchCount.entries()) {
+      const [psetName, propertyName] = key.split('::')
+      matches.push({ matchType: 'property', psetName, propertyName, occurrences: count })
+    }
+    for (const [key, count] of valMatchCount.entries()) {
+      const [psetName, propertyName] = key.split('::')
+      if (!propMatchCount.has(key)) {
+        matches.push({ matchType: 'value', psetName, propertyName, occurrences: count })
+      }
+    }
+
+    results.push({ entityType: typeName, totalCount: total, matchingCount: matchSet.size, matches })
+  }
+
+  results.sort((a, b) => b.matchingCount - a.matchingCount)
+  post({ type: 'searchResults', query, results })
+}
+
 async function selectEntityType(entityType: string) {
   if (!api || modelId < 0) return
 
@@ -417,6 +489,8 @@ self.onmessage = async (e: MessageEvent<WorkerInMessage>) => {
       await loadFile(msg.buffer)
     } else if (msg.type === 'select') {
       await selectEntityType(msg.entityType)
+    } else if (msg.type === 'search') {
+      searchGlobal(msg.query)
     }
   } catch (err) {
     post({ type: 'error', message: String(err) })
