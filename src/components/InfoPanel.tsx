@@ -25,10 +25,13 @@ function AggregateValue({ agg }: { agg: ValueAggregate }) {
   }
 
   if (agg.kind === 'numeric') {
-    const same = agg.min === agg.max
+    const fmt = (n: number) => parseFloat(n.toFixed(2))
+    const min = fmt(agg.min!)
+    const max = fmt(agg.max!)
+    const same = min === max
     return (
       <span className="text-xs text-gray-300 font-mono">
-        {same ? agg.min : `${agg.min} … ${agg.max}`}
+        {same ? min : `${min} … ${max}`}
       </span>
     )
   }
