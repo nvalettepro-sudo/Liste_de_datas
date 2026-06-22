@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd /home/user/Liste_de_datas && node -e \"const fs=require('fs');const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));const now=new Date();const dd=String(now.getDate()).padStart(2,'0');const mm=String(now.getMonth()+1).padStart(2,'0');const yy=String(now.getFullYear()).slice(2);const today=dd+'/'+mm+'/'+yy;const match=pkg.version.match(/^(\\d{2}\\/\\d{2}\\/\\d{2})-(\\d+)$/);const num=(match&&match[1]===today)?Number(match[2])+1:1;pkg.version=today+'-'+num;fs.writeFileSync('package.json',JSON.stringify(pkg,null,2)+'\\n');console.log('Version: '+pkg.version);\" 2>/dev/null || true",
+            "command": "cd /home/user/Liste_de_datas && node -e \"const fs=require('fs');const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));const now=new Date();const dd=String(now.getDate()).padStart(2,'0');const mm=String(now.getMonth()+1).padStart(2,'0');const yy=String(now.getFullYear()).slice(2);const today=dd+'/'+mm+'/'+yy;const match=pkg.version.match(/^(\\d{2}\\/\\d{2}\\/\\d{2})-(\\d+)$/);const num=(match&&match[1]===today)?Number(match[2])+1:1;pkg.version=today+'-'+num;fs.writeFileSync('package.json',JSON.stringify(pkg,null,2)+'\\n');\" && git add package.json && git diff --cached --quiet || git commit -m 'chore: bump version' && git push origin main 2>/dev/null || true",
             "statusMessage": "Mise à jour de la version…"
           }
         ]
