@@ -1,4 +1,5 @@
 import { useStore } from '../store/useStore'
+import { version } from '../../package.json'
 
 const VERSION_COLORS: Record<string, string> = {
   IFC2X3: 'bg-indigo-800 text-indigo-200',
@@ -61,6 +62,8 @@ export function TopBar() {
         )}
 
         <div className="flex-1" />
+
+        <span className="text-xs font-mono text-gray-600">v{version}</span>
 
         <div className="relative">
           <input
