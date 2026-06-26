@@ -1,7 +1,7 @@
 {
   "name": "ifc-data-explorer",
   "private": true,
-  "version": "1.0.0",
+  "version": "26/06/26-2",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -37,27 +37,61 @@
     "appId": "com.nvalette.ifc-data-explorer",
     "productName": "IFC Data Explorer",
     "copyright": "Nico Valette — BIM Manager",
-    "directories": { "output": "release" },
-    "files": ["dist/**", "electron/**", "package.json"],
-    "asarUnpack": ["dist/web-ifc.wasm", "dist/web-ifc-mt.wasm"],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "dist/web-ifc.wasm",
+      "dist/web-ifc-mt.wasm"
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "public/icon.ico"
     },
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
       "icon": "public/icon.icns",
       "category": "public.app-category.productivity"
     },
     "linux": {
-      "target": [{ "target": "AppImage", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "public/icon.png",
       "category": "Utility"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerLanguages": ["fr_FR", "en_US"],
+      "installerLanguages": [
+        "fr_FR",
+        "en_US"
+      ],
       "language": "1036"
     }
   }

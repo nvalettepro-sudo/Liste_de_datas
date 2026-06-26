@@ -3,12 +3,14 @@ import { TopBar } from './components/TopBar'
 import { LeftPanel } from './components/LeftPanel'
 import { InfoPanel } from './components/InfoPanel'
 import { FileDropZone } from './components/FileDropZone'
+import { SearchResultsPanel } from './components/SearchResultsPanel'
 
 export function App() {
   const fileName = useStore((s) => s.fileName)
   const error = useStore((s) => s.error)
   const clearError = useStore((s) => s.clearError)
   const isLoading = useStore((s) => s.isLoading)
+  const globalSearchResults = useStore((s) => s.globalSearchResults)
 
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
@@ -16,11 +18,12 @@ export function App() {
 
       <TopBar />
 
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 relative">
         <div className="w-56 flex-shrink-0 min-h-0">
           <LeftPanel />
         </div>
         <InfoPanel />
+        {globalSearchResults !== null && <SearchResultsPanel />}
       </div>
 
       {error && (
