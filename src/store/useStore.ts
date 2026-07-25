@@ -42,6 +42,7 @@ interface AppState {
   graphOmitted: number
 
   loadFile: (file: File) => void
+  closeFile: () => void
   selectType: (type: string) => void
   setSearchQuery: (q: string) => void
   triggerGlobalSearch: () => void
@@ -190,6 +191,38 @@ export const useStore = create<AppState>((set, get) => ({
     const w = getOrCreateWorker(set)
     file.arrayBuffer().then((buf) => {
       w.postMessage({ type: 'load', buffer: buf }, [buf])
+    })
+  },
+
+  closeFile: () => {
+    if (worker) {
+      worker.terminate()
+      worker = null
+    }
+    set({
+      fileName: null,
+      ifcVersion: null,
+      isLoading: false,
+      loadProgress: 0,
+      loadPhase: '',
+      error: null,
+      entityTypes: [],
+      selectedType: null,
+      aggregatedData: null,
+      searchQuery: '',
+      globalSearchResults: null,
+      isSearching: false,
+      graphOpen: false,
+      graphLoading: false,
+      graphRootId: null,
+      graphNodes: [],
+      graphEdges: [],
+      graphPositions: {},
+      graphExpanded: [],
+      graphEntityFilter: null,
+      graphStoreyFilter: null,
+      graphTruncated: false,
+      graphOmitted: 0,
     })
   },
 

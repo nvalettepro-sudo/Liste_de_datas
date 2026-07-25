@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -9,6 +9,7 @@ import {
   type Edge,
   type NodeMouseHandler,
   type OnNodeDrag,
+  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
@@ -42,6 +43,7 @@ export function GraphView() {
   const expandGraphNode = useStore((s) => s.expandGraphNode)
   const setGraphNodePosition = useStore((s) => s.setGraphNodePosition)
   const relayoutGraph = useStore((s) => s.relayoutGraph)
+  const rfInstance = useRef<ReactFlowInstance | null>(null)
 
   /**
    * Filtrage client : le filtre spatial ne garde que les nœuds directement
@@ -119,6 +121,16 @@ export function GraphView() {
     [setGraphNodePosition]
   )
 
+  const centerView = useCallback(() => {
+    rfInstance.current?.fitView({ padding: 0.2, duration: 300 })
+  }, [])
+
+  const handleRelayout = useCallback(() => {
+    relayoutGraph()
+    // Le nouveau calcul peut déplacer les nœuds hors du cadre courant.
+    requestAnimationFrame(() => centerView())
+  }, [relayoutGraph, centerView])
+
   const rootType = graphRootId?.replace('g:root:', '') ?? ''
   const rootFr = IFC_FR[rootType]
 
@@ -142,7 +154,15 @@ export function GraphView() {
         </span>
 
         <button
-          onClick={relayoutGraph}
+          onClick={centerView}
+          className="px-2 py-1 text-xs text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors"
+          title="Recentrer le graphe dans la fenêtre"
+        >
+          ⊙ Centrer
+        </button>
+
+        <button
+          onClick={handleRelayout}
           className="px-2 py-1 text-xs text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors"
           title="Recalculer une disposition claire du graphe"
         >
@@ -181,6 +201,7 @@ export function GraphView() {
               nodes={rfNodes}
               edges={rfEdges}
               nodeTypes={nodeTypes}
+              onInit={(instance) => { rfInstance.current = instance }}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeDragStop={onNodeDragStop}
               fitView

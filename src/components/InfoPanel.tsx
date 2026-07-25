@@ -176,6 +176,7 @@ export function InfoPanel() {
   const searchQuery = useStore((s) => s.searchQuery)
   const isLoading = useStore((s) => s.isLoading)
   const openGraph = useStore((s) => s.openGraph)
+  const closeFile = useStore((s) => s.closeFile)
 
   const searchQ = searchQuery.trim().toLowerCase()
 
@@ -262,6 +263,13 @@ export function InfoPanel() {
           className="px-2 py-1 text-xs text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors flex-shrink-0"
         >
           Exporter CSV
+        </button>
+        <button
+          onClick={closeFile}
+          className="px-2 py-1 text-xs text-red-300 border border-red-900 hover:border-red-700 hover:text-red-200 transition-colors flex-shrink-0"
+          title="Fermer la maquette et revenir à l'écran de chargement"
+        >
+          Fermer
         </button>
       </div>
 
