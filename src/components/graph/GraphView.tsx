@@ -41,6 +41,7 @@ export function GraphView() {
   const closeGraph = useStore((s) => s.closeGraph)
   const expandGraphNode = useStore((s) => s.expandGraphNode)
   const setGraphNodePosition = useStore((s) => s.setGraphNodePosition)
+  const relayoutGraph = useStore((s) => s.relayoutGraph)
 
   /**
    * Filtrage client : le filtre spatial ne garde que les nœuds directement
@@ -139,6 +140,14 @@ export function GraphView() {
           {rfNodes.length} nœud{rfNodes.length > 1 ? 's' : ''} · {rfEdges.length} arête
           {rfEdges.length > 1 ? 's' : ''}
         </span>
+
+        <button
+          onClick={relayoutGraph}
+          className="px-2 py-1 text-xs text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors"
+          title="Recalculer une disposition claire du graphe"
+        >
+          ⟲ Réorganiser
+        </button>
 
         <button
           onClick={closeGraph}

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { DEFAULT_REL_TYPES } from '../lib/types'
+import { layoutGraph, type XY } from '../lib/graphLayout'
 import type {
   EntityTypeSummary,
   AggregatedEntityData,
@@ -10,40 +11,7 @@ import type {
   WorkerOutMessage,
 } from '../lib/types'
 
-export interface XY { x: number; y: number }
-
-/** Rayon d'expansion autour du nœud parent, en pixels. */
-const RING_RADIUS = 340
-
-/**
- * Dispose les nouveaux nœuds sur un anneau autour de leur origine. Le rayon
- * croît par paliers quand l'anneau est saturé, pour limiter les recouvrements
- * sans recourir à un moteur de layout complet (les nœuds restent déplaçables).
- */
-function layoutAround(origin: XY, ids: string[], existing: Record<string, XY>): Record<string, XY> {
-  const out: Record<string, XY> = {}
-  const perRing = 10
-  ids.forEach((id, i) => {
-    const ring = Math.floor(i / perRing)
-    const idxInRing = i % perRing
-    const inThisRing = Math.min(perRing, ids.length - ring * perRing)
-    const radius = RING_RADIUS * (1 + ring * 0.55)
-    const angle = (idxInRing / inThisRing) * Math.PI * 2 + ring * 0.4
-    let pos = { x: origin.x + Math.cos(angle) * radius, y: origin.y + Math.sin(angle) * radius }
-    // Décalage si la position est déjà occupée par un nœud existant.
-    let guard = 0
-    while (
-      guard < 12 &&
-      Object.values(existing).some((p) => Math.abs(p.x - pos.x) < 120 && Math.abs(p.y - pos.y) < 70)
-    ) {
-      pos = { x: pos.x + 70, y: pos.y + 45 }
-      guard++
-    }
-    out[id] = pos
-    existing[id] = pos
-  })
-  return out
-}
+export type { XY }
 
 interface AppState {
   fileName: string | null
@@ -84,6 +52,7 @@ interface AppState {
   closeGraph: () => void
   expandGraphNode: (nodeId: string) => void
   setGraphNodePosition: (nodeId: string, pos: XY) => void
+  relayoutGraph: () => void
   toggleGraphRelType: (relType: GraphRelType) => void
   setGraphEntityFilter: (types: string[] | null) => void
   setGraphStoreyFilter: (nodeId: string | null) => void
@@ -134,29 +103,22 @@ function getOrCreateWorker(set: SetState) {
       set((prev) => {
         const baseNodes = isRoot ? [] : prev.graphNodes
         const baseEdges = isRoot ? [] : prev.graphEdges
-        const positions: Record<string, XY> = isRoot ? {} : { ...prev.graphPositions }
 
         const byId = new Map(baseNodes.map((n) => [n.id, n]))
-        const freshIds: string[] = []
-        for (const n of nodes) {
-          if (!byId.has(n.id)) freshIds.push(n.id)
-          byId.set(n.id, n)
-        }
-
-        if (isRoot) {
-          positions[originId] = { x: 0, y: 0 }
-        }
-        const originPos = positions[originId] ?? { x: 0, y: 0 }
-        const placeable = freshIds.filter((id) => id !== originId)
-        Object.assign(positions, layoutAround(originPos, placeable, positions))
+        for (const n of nodes) byId.set(n.id, n)
 
         const edgeById = new Map(baseEdges.map((e) => [e.id, e]))
         for (const e of edges) edgeById.set(e.id, e)
 
+        const allNodes = Array.from(byId.values())
+        const allEdges = Array.from(edgeById.values())
+
         return {
-          graphNodes: Array.from(byId.values()),
-          graphEdges: Array.from(edgeById.values()),
-          graphPositions: positions,
+          graphNodes: allNodes,
+          graphEdges: allEdges,
+          // Recalcul complet : une expansion locale (anneau) désynchronise
+          // vite l'ensemble dès que plusieurs zones sont étendues séparément.
+          graphPositions: layoutGraph(allNodes, allEdges),
           graphExpanded: isRoot
             ? [originId]
             : prev.graphExpanded.includes(originId)
@@ -290,6 +252,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   setGraphNodePosition: (nodeId: string, pos: XY) => {
     set((prev) => ({ graphPositions: { ...prev.graphPositions, [nodeId]: pos } }))
+  },
+
+  relayoutGraph: () => {
+    const { graphNodes, graphEdges } = get()
+    set({ graphPositions: layoutGraph(graphNodes, graphEdges) })
   },
 
   /**

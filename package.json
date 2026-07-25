@@ -17,12 +17,14 @@
     "@tanstack/react-table": "^8.20.5",
     "@tanstack/react-virtual": "^3.10.9",
     "@xyflow/react": "^12.11.2",
+    "dagre": "^0.8.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "web-ifc": "^0.0.57",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
+    "@types/dagre": "^0.7.54",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
