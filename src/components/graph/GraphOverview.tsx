@@ -175,6 +175,7 @@ export function GraphOverview() {
             <span style={{ color: REL_META[selectedEdge.relType].color }}>
               {REL_META[selectedEdge.relType].label}
             </span>
+            <span className="text-gray-600 font-mono"> ({selectedEdge.relType})</span>
             {' × '}
             {selectedEdge.count.toLocaleString('fr-FR')}
           </span>
@@ -226,13 +227,16 @@ export function GraphOverview() {
                     type="checkbox"
                     checked={checked}
                     onChange={() => toggleOverviewRelType(rel)}
-                    className="mt-0.5 accent-blue-600"
+                    className="mt-0.5 accent-blue-600 flex-shrink-0"
                   />
-                  <span
-                    className="text-xs text-gray-300 group-hover:text-gray-100"
-                    style={{ color: checked ? meta.color : undefined }}
-                  >
-                    {meta.label}
+                  <span className="min-w-0">
+                    <span
+                      className="block text-xs text-gray-300 group-hover:text-gray-100"
+                      style={{ color: checked ? meta.color : undefined }}
+                    >
+                      {meta.label}
+                    </span>
+                    <span className="block text-[10px] font-mono text-gray-600 truncate">{rel}</span>
                   </span>
                 </label>
               )

@@ -1,7 +1,8 @@
 import { create } from 'zustand'
-import { DEFAULT_REL_TYPES } from '../lib/types'
+import { DEFAULT_REL_TYPES, GRAPH_REL_TYPES } from '../lib/types'
 import { layoutGraph, type XY } from '../lib/graphLayout'
 import { buildHubGraph, type HubGraphNode, type HubGraphEdge } from '../lib/hubGraph'
+import { layoutHubGraph } from '../lib/hubLayout'
 import type {
   EntityTypeSummary,
   AggregatedEntityData,
@@ -19,7 +20,6 @@ export type { XY }
  * la plupart des types) — un espacement plus large que le mode détail limite
  * les croisements d'arêtes qui la rendent illisible.
  */
-const OVERVIEW_LAYOUT_OPTIONS = { nodesep: 70, ranksep: 200, wrapThreshold: 6 }
 
 interface AppState {
   fileName: string | null
@@ -165,7 +165,7 @@ function getOrCreateWorker(set: SetState) {
       set({
         overviewNodes: hubNodes,
         overviewEdges: hubEdges,
-        overviewPositions: layoutGraph(hubNodes, hubEdges, OVERVIEW_LAYOUT_OPTIONS),
+        overviewPositions: layoutHubGraph(hubNodes, hubEdges, GRAPH_REL_TYPES),
         graphLoading: false,
         isLoading: false,
         loadPhase: '',
@@ -411,6 +411,6 @@ export const useStore = create<AppState>((set, get) => ({
 
   relayoutOverview: () => {
     const { overviewNodes, overviewEdges } = get()
-    set({ overviewPositions: layoutGraph(overviewNodes, overviewEdges, OVERVIEW_LAYOUT_OPTIONS) })
+    set({ overviewPositions: layoutHubGraph(overviewNodes, overviewEdges, GRAPH_REL_TYPES) })
   },
 }))
