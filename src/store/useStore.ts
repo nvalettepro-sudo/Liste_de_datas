@@ -20,7 +20,7 @@ export type { XY }
  * la plupart des types) — un espacement plus large que le mode détail limite
  * les croisements d'arêtes qui la rendent illisible.
  */
-const OVERVIEW_LAYOUT_OPTIONS = { nodesep: 90, ranksep: 220 }
+const OVERVIEW_LAYOUT_OPTIONS = { nodesep: 70, ranksep: 200, wrapThreshold: 6 }
 
 interface AppState {
   fileName: string | null
