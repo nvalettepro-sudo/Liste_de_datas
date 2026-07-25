@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { DEFAULT_REL_TYPES } from '../lib/types'
 import { layoutGraph, type XY } from '../lib/graphLayout'
+import { buildHubGraph, type HubGraphNode, type HubGraphEdge } from '../lib/hubGraph'
 import type {
   EntityTypeSummary,
   AggregatedEntityData,
@@ -8,8 +9,6 @@ import type {
   GraphNode,
   GraphEdge,
   GraphRelType,
-  TypeGraphNode,
-  TypeGraphEdge,
   WorkerOutMessage,
 } from '../lib/types'
 
@@ -54,9 +53,9 @@ interface AppState {
   graphTruncated: boolean
   graphOmitted: number
 
-  /* --- Vue d'ensemble (v2.1) --- */
-  overviewNodes: TypeGraphNode[]
-  overviewEdges: TypeGraphEdge[]
+  /* --- Vue d'ensemble (v2.1) — graphe à hubs de relation --- */
+  overviewNodes: HubGraphNode[]
+  overviewEdges: HubGraphEdge[]
   overviewPositions: Record<string, XY>
   overviewRelTypes: GraphRelType[]
 
@@ -158,11 +157,15 @@ function getOrCreateWorker(set: SetState) {
         }
       })
     } else if (msg.type === 'graphOverviewData') {
-      const { nodes, edges } = msg.payload
+      // Le graphe brut (type à type) est immédiatement transformé en graphe à
+      // hubs : chaque relation devient un nœud nommé plutôt qu'une simple
+      // couleur d'arête. Le filtrage par relation (overviewRelTypes) reste un
+      // filtrage d'affichage pur ensuite, sans recalcul.
+      const { nodes: hubNodes, edges: hubEdges } = buildHubGraph(msg.payload.nodes, msg.payload.edges)
       set({
-        overviewNodes: nodes,
-        overviewEdges: edges,
-        overviewPositions: layoutGraph(nodes, edges, OVERVIEW_LAYOUT_OPTIONS),
+        overviewNodes: hubNodes,
+        overviewEdges: hubEdges,
+        overviewPositions: layoutGraph(hubNodes, hubEdges, OVERVIEW_LAYOUT_OPTIONS),
         graphLoading: false,
         isLoading: false,
         loadPhase: '',

@@ -18,12 +18,13 @@ import { useStore } from '../../store/useStore'
 import { GRAPH_REL_TYPES, type GraphRelType } from '../../lib/types'
 import { REL_META } from '../../lib/graphMeta'
 import { TypeNodeCard, type TypeNodeCardData } from './TypeNodeCard'
+import { HubNodeCard, type HubNodeCardData } from './HubNodeCard'
 
-const nodeTypes = { typeNode: TypeNodeCard }
+const nodeTypes = { typeNode: TypeNodeCard, hubNode: HubNodeCard }
 
 interface SelectedEdgeInfo {
-  source: string
-  target: string
+  sourceLabel: string
+  targetLabel: string
   relType: GraphRelType
   count: number
 }
@@ -41,6 +42,12 @@ export function GraphOverview() {
   const relayoutOverview = useStore((s) => s.relayoutOverview)
   const rfInstance = useRef<ReactFlowInstance | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdgeInfo | null>(null)
+
+  const labelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const n of overviewNodes) m.set(n.id, n.label)
+    return m
+  }, [overviewNodes])
 
   const visibleEdges = useMemo(
     () => overviewEdges.filter((e) => overviewRelTypes.includes(e.relType)),
@@ -60,28 +67,39 @@ export function GraphOverview() {
     () =>
       overviewNodes
         .filter((n) => visibleNodeIds.has(n.id))
-        .map((n) => ({
-          id: n.id,
-          type: 'typeNode',
-          position: overviewPositions[n.id] ?? { x: 0, y: 0 },
-          data: { node: n } satisfies TypeNodeCardData,
-        })),
+        .map((n) =>
+          n.kind === 'hub'
+            ? {
+                id: n.id,
+                type: 'hubNode',
+                position: overviewPositions[n.id] ?? { x: 0, y: 0 },
+                data: { relType: n.relType!, count: n.count } satisfies HubNodeCardData,
+              }
+            : {
+                id: n.id,
+                type: 'typeNode',
+                position: overviewPositions[n.id] ?? { x: 0, y: 0 },
+                data: {
+                  node: { id: n.id, entityType: n.entityType!, count: n.count },
+                } satisfies TypeNodeCardData,
+              }
+        ),
     [overviewNodes, overviewPositions, visibleNodeIds]
   )
 
   /**
-   * Pas d'étiquette permanente sur chaque arête : sur une vraie maquette, un
-   * type comme IfcPropertySet se relie à la quasi-totalité des autres types,
-   * et des dizaines d'étiquettes de texte superposées rendent le graphe
-   * illisible. Le détail (relation + compte) s'affiche au clic sur l'arête,
-   * dans le bandeau du haut.
+   * Le nom de chaque relation est déjà écrit sur son hub — plus besoin
+   * d'étiquette permanente sur chaque arête. Le détail (type source, type
+   * cible, nombre d'occurrences) reste disponible au clic, dans le bandeau.
    */
   const rfEdges: Edge[] = useMemo(
     () =>
       visibleEdges.map((e) => {
         const meta = REL_META[e.relType]
-        const isSelected = selectedEdge?.source === e.source && selectedEdge?.target === e.target
-          && selectedEdge?.relType === e.relType
+        const isSelected =
+          selectedEdge?.relType === e.relType &&
+          selectedEdge?.sourceLabel === labelById.get(e.source) &&
+          selectedEdge?.targetLabel === labelById.get(e.target)
         return {
           id: e.id,
           source: e.source,
@@ -89,25 +107,36 @@ export function GraphOverview() {
           style: {
             stroke: meta.color,
             strokeWidth: isSelected ? 4 : Math.min(1 + Math.log10(e.count + 1) * 0.9, 3),
-            opacity: isSelected ? 1 : 0.55,
+            opacity: isSelected ? 1 : 0.6,
           },
           markerEnd: { type: MarkerType.ArrowClosed, color: meta.color, width: 14, height: 14 },
           data: { relType: e.relType, count: e.count },
         }
       }),
-    [visibleEdges, selectedEdge]
+    [visibleEdges, selectedEdge, labelById]
   )
 
   const onNodeDoubleClick: NodeMouseHandler = useCallback(
-    (_evt, node) => openGraph(node.id, true),
+    (_evt, node) => {
+      if (node.id.startsWith('hub:')) return
+      openGraph(node.id, true)
+    },
     [openGraph]
   )
 
-  const onEdgeClick: EdgeMouseHandler = useCallback((_evt, edge) => {
-    const data = edge.data as { relType: GraphRelType; count: number } | undefined
-    if (!data) return
-    setSelectedEdge({ source: edge.source, target: edge.target, relType: data.relType, count: data.count })
-  }, [])
+  const onEdgeClick: EdgeMouseHandler = useCallback(
+    (_evt, edge) => {
+      const data = edge.data as { relType: GraphRelType; count: number } | undefined
+      if (!data) return
+      setSelectedEdge({
+        sourceLabel: labelById.get(edge.source) ?? edge.source,
+        targetLabel: labelById.get(edge.target) ?? edge.target,
+        relType: data.relType,
+        count: data.count,
+      })
+    },
+    [labelById]
+  )
 
   const onPaneClick = useCallback(() => setSelectedEdge(null), [])
 
@@ -132,16 +161,16 @@ export function GraphOverview() {
           <p className="text-sm font-medium text-gray-100 leading-tight">
             Vue d'ensemble de la maquette
           </p>
-          <p className="text-[11px] text-gray-500">Relations IFC réelles, agrégées par type</p>
+          <p className="text-[11px] text-gray-500">Relations IFC réelles, par hub nommé</p>
         </div>
 
         <div className="flex-1" />
 
         {selectedEdge && (
           <span className="text-xs text-gray-200 bg-gray-800 border border-gray-700 rounded px-2 py-1">
-            <span className="font-mono">{selectedEdge.source}</span>
+            <span className="font-mono">{selectedEdge.sourceLabel}</span>
             {' → '}
-            <span className="font-mono">{selectedEdge.target}</span>
+            <span className="font-mono">{selectedEdge.targetLabel}</span>
             {' · '}
             <span style={{ color: REL_META[selectedEdge.relType].color }}>
               {REL_META[selectedEdge.relType].label}
@@ -154,7 +183,7 @@ export function GraphOverview() {
         {graphLoading && <span className="text-xs text-blue-400 animate-pulse">Calcul…</span>}
 
         <span className="text-[11px] text-gray-500">
-          {rfNodes.length} type{rfNodes.length > 1 ? 's' : ''} · {rfEdges.length} relation
+          {rfNodes.length} nœud{rfNodes.length > 1 ? 's' : ''} · {rfEdges.length} lien
           {rfEdges.length > 1 ? 's' : ''}
         </span>
 
@@ -211,7 +240,8 @@ export function GraphOverview() {
           </div>
 
           <p className="mt-4 text-[10px] text-gray-600 leading-snug">
-            Double-clic sur un type pour explorer ses instances en détail.
+            Chaque relation IFC apparaît comme un nœud nommé. Double-clic sur
+            un type pour explorer ses instances en détail.
           </p>
         </div>
 
@@ -246,7 +276,7 @@ export function GraphOverview() {
                 maskColor="rgba(3,7,18,0.75)"
                 style={{ width: 150, height: 100 }}
                 className="!border !border-gray-800"
-                nodeColor="#38bdf8"
+                nodeColor={(n) => (n.type === 'hubNode' ? '#f5f5f5' : '#38bdf8')}
                 nodeStrokeWidth={3}
               />
             </ReactFlow>
