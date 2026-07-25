@@ -175,6 +175,7 @@ export function InfoPanel() {
   const aggregatedData = useStore((s) => s.aggregatedData)
   const searchQuery = useStore((s) => s.searchQuery)
   const isLoading = useStore((s) => s.isLoading)
+  const openGraph = useStore((s) => s.openGraph)
 
   const searchQ = searchQuery.trim().toLowerCase()
 
@@ -249,6 +250,13 @@ export function InfoPanel() {
         <span className="text-sm text-gray-500 flex-shrink-0">
           {aggregatedData.totalCount.toLocaleString('fr-FR')} occurrence{aggregatedData.totalCount > 1 ? 's' : ''}
         </span>
+        <button
+          onClick={() => openGraph(aggregatedData.entityType)}
+          className="px-2 py-1 text-xs text-blue-300 border border-blue-800 hover:border-blue-600 hover:text-blue-200 transition-colors flex-shrink-0"
+          title="Explorer les relations IFC de ce type sous forme de graphe"
+        >
+          Voir en graphe
+        </button>
         <button
           onClick={() => exportCSV(aggregatedData)}
           className="px-2 py-1 text-xs text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors flex-shrink-0"

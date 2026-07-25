@@ -31,3 +31,24 @@
     color: #f9fafb;
   }
 }
+
+/* --- Thème sombre pour React Flow (vue graphe) --- */
+/* La feuille de style de React Flow est injectée après celle-ci : forcer. */
+.react-flow .react-flow__controls-button {
+  background: #111827 !important;
+  border-bottom: 1px solid #1f2937 !important;
+  fill: #9ca3af !important;
+}
+.react-flow .react-flow__controls-button:hover {
+  background: #1f2937 !important;
+  fill: #e5e7eb !important;
+}
+.react-flow .react-flow__controls-button svg {
+  fill: currentColor;
+}
+.react-flow__minimap {
+  background: #0b1220;
+}
+.react-flow__attribution {
+  display: none;
+}

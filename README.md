@@ -12,6 +12,7 @@ Explorateur de fichiers IFC orienté données. Charge un fichier `.ifc` et affic
 - **Vue agrégée par type** — pour chaque type IFC (IfcWall, IfcDoor…) : nombre d'occurrences, valeurs distinctes, couverture des propriétés
 - **Psets Standards et Personnalisés** — séparés, avec taux de remplissage par propriété
 - **Recherche globale** — tape un terme pour trouver instantanément tous les types d'entités qui contiennent ce Pset, cette propriété ou cette valeur
+- **Vue graphe de relations** — depuis un type sélectionné, explore le fichier comme le graphe orienté qu'il est réellement : matériaux, types, classifications et structure spatiale. Les définitions partagées n'apparaissent qu'une fois, avec le nombre d'occurrences qui pointent vers elles. Double-clic sur un nœud pour l'étendre.
 - **Export CSV** — exporte les données agrégées du type sélectionné
 - **Traductions françaises** des types IFC courants
 - Compatible **IFC2X3**, **IFC4**, **IFC4X3**
@@ -25,7 +26,8 @@ Explorateur de fichiers IFC orienté données. Charge un fichier `.ifc` et affic
 | Tailwind CSS | Style |
 | web-ifc (WASM) | Lecture des fichiers IFC |
 | Zustand | État global |
-| Web Worker | Parsing hors du thread UI |
+| React Flow | Rendu de la vue graphe |
+| Web Worker | Parsing et extraction des relations hors du thread UI |
 
 ## Développement local
 

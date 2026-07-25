@@ -10,6 +10,10 @@ import type {
   TextValueCount,
   GlobalSearchMatch,
   GlobalSearchResult,
+  GraphRelType,
+  GraphNode,
+  GraphEdge,
+  GraphPayload,
   WorkerInMessage,
   WorkerOutMessage,
 } from '../lib/types'
@@ -176,6 +180,11 @@ async function loadFile(buffer: ArrayBuffer) {
   entityPsetMap.clear()
   storeyCache.clear()
   aggregationCache.clear()
+  outRels.clear()
+  inRels.clear()
+  nodeMetaCache.clear()
+  groupMembers.clear()
+  indexedRelTypes = new Set()
 
   try {
     const header = api.GetModelSchema(modelId)
@@ -480,6 +489,414 @@ async function selectEntityType(entityType: string) {
   post({ type: 'aggregated', data })
 }
 
+/* ==================== Vue graphe (v2) ==================== */
+
+interface RawRel {
+  relType: GraphRelType
+  relGlobalId: string | null
+  relatingId: number
+  relatedId: number
+}
+
+/**
+ * Attributs porteurs de chaque relation. Attention : les IfcRelAssociates* et
+ * IfcRelAggregates exposent `RelatedObjects`, mais IfcRelContainedInSpatialStructure
+ * utilise `RelatedElements`.
+ */
+const REL_ATTRS: Record<GraphRelType, { relating: string; related: string; code: number }> = {
+  IfcRelAssociatesMaterial: {
+    relating: 'RelatingMaterial', related: 'RelatedObjects', code: WebIFC.IFCRELASSOCIATESMATERIAL,
+  },
+  IfcRelAssociatesClassification: {
+    relating: 'RelatingClassification', related: 'RelatedObjects', code: WebIFC.IFCRELASSOCIATESCLASSIFICATION,
+  },
+  IfcRelDefinesByType: {
+    relating: 'RelatingType', related: 'RelatedObjects', code: WebIFC.IFCRELDEFINESBYTYPE,
+  },
+  IfcRelContainedInSpatialStructure: {
+    relating: 'RelatingStructure', related: 'RelatedElements', code: WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE,
+  },
+  IfcRelAggregates: {
+    relating: 'RelatingObject', related: 'RelatedObjects', code: WebIFC.IFCRELAGGREGATES,
+  },
+  IfcRelDefinesByProperties: {
+    relating: 'RelatingPropertyDefinition', related: 'RelatedObjects', code: WebIFC.IFCRELDEFINESBYPROPERTIES,
+  },
+}
+
+const SPATIAL_TYPES = new Set([
+  'IfcProject', 'IfcSite', 'IfcBuilding', 'IfcBuildingStorey',
+  'IfcSpace', 'IfcSpatialZone', 'IfcSpatialStructureElement',
+])
+
+/** Au-delà, un groupe d'occurrences reste replié au lieu d'être éclaté. */
+const GROUP_EXPLODE_THRESHOLD = 20
+/** Plafond de nœuds renvoyés par expansion (contrainte §6). */
+const MAX_EXPANSION_NODES = 150
+
+const outRels = new Map<number, RawRel[]>()
+const inRels = new Map<number, RawRel[]>()
+const nodeMetaCache = new Map<number, GraphNode>()
+/** Membres des nœuds groupés déjà émis, pour pouvoir les ré-étendre. */
+const groupMembers = new Map<string, number[]>()
+
+let indexedRelTypes = new Set<GraphRelType>()
+
+function pushRel(map: Map<number, RawRel[]>, key: number, rel: RawRel) {
+  const arr = map.get(key)
+  if (arr) arr.push(rel)
+  else map.set(key, [rel])
+}
+
+function refIds(raw: unknown): number[] {
+  if (raw === null || raw === undefined) return []
+  if (Array.isArray(raw)) {
+    const out: number[] = []
+    for (const r of raw) {
+      const o = r as Record<string, unknown>
+      if (o?.value !== undefined) out.push(o.value as number)
+    }
+    return out
+  }
+  const o = raw as Record<string, unknown>
+  return o?.value !== undefined ? [o.value as number] : []
+}
+
+/**
+ * Indexe les relations demandées. L'index est incrémental : on ne réindexe que
+ * les types de relation absents (IfcRelDefinesByProperties reste hors index
+ * tant qu'il n'est pas explicitement coché, sa volumétrie étant très élevée).
+ */
+function buildRelationIndex(relTypes: GraphRelType[]) {
+  if (!api || modelId < 0) return
+  const missing = relTypes.filter((t) => !indexedRelTypes.has(t))
+  if (missing.length === 0) return
+
+  for (let t = 0; t < missing.length; t++) {
+    const relType = missing[t]
+    const { relating, related, code } = REL_ATTRS[relType]
+
+    post({
+      type: 'progress',
+      percent: Math.round((t / missing.length) * 90),
+      phase: `Index des relations : ${relType}…`,
+    })
+
+    let lineIds: { size(): number; get(i: number): number }
+    try {
+      lineIds = api.GetLineIDsWithType(modelId, code)
+    } catch {
+      indexedRelTypes.add(relType)
+      continue
+    }
+
+    for (let i = 0; i < lineIds.size(); i++) {
+      let rel: Record<string, unknown>
+      try {
+        rel = api.GetLine(modelId, lineIds.get(i), false) as Record<string, unknown>
+      } catch { continue }
+      if (!rel) continue
+
+      const relatingIds = refIds(rel[relating])
+      const relatedIds = refIds(rel[related])
+      if (relatingIds.length === 0 || relatedIds.length === 0) continue
+
+      const relGlobalId = safeStr(rel.GlobalId)
+
+      for (const relatingId of relatingIds) {
+        for (const relatedId of relatedIds) {
+          const raw: RawRel = { relType, relGlobalId, relatingId, relatedId }
+          pushRel(outRels, relatingId, raw)
+          pushRel(inRels, relatedId, raw)
+        }
+      }
+    }
+
+    indexedRelTypes.add(relType)
+  }
+
+  post({ type: 'progress', percent: 100, phase: 'Terminé' })
+}
+
+function classifyKind(entityType: string): GraphNode['kind'] {
+  if (SPATIAL_TYPES.has(entityType)) return 'spatial'
+  if (
+    entityType.startsWith('IfcMaterial') ||
+    entityType.startsWith('IfcClassification') ||
+    entityType === 'IfcPropertySet' ||
+    entityType === 'IfcElementQuantity' ||
+    entityType.endsWith('Type') ||
+    entityType.endsWith('Style')
+  ) {
+    return 'definition'
+  }
+  return 'occurrence'
+}
+
+/**
+ * Libellé lisible d'un nœud. Les définitions matériaux et classifications
+ * portent leur nom sur des attributs différents selon le sous-type et le
+ * schéma (IFC2X3 : `ItemReference`, IFC4+ : `Identification`).
+ */
+function resolveLabel(entityType: string, line: Record<string, unknown>): string {
+  const name = safeStr(line.Name)
+
+  switch (entityType) {
+    case 'IfcMaterialLayerSet':
+      return safeStr(line.LayerSetName) ?? 'Couches sans nom'
+
+    case 'IfcMaterialLayerSetUsage':
+    case 'IfcMaterialProfileSetUsage': {
+      const forSet = (line.ForLayerSet ?? line.ForProfileSet) as Record<string, unknown> | undefined
+      if (forSet?.value !== undefined && api) {
+        try {
+          const set = api.GetLine(modelId, forSet.value as number, false) as Record<string, unknown>
+          if (set) return safeStr(set.LayerSetName) ?? safeStr(set.Name) ?? entityType
+        } catch { /* libellé générique en repli */ }
+      }
+      return entityType
+    }
+
+    case 'IfcMaterialList': {
+      const n = refIds(line.Materials).length
+      return `Liste de ${n} matériau${n > 1 ? 'x' : ''}`
+    }
+
+    case 'IfcClassificationReference': {
+      const ident = safeStr(line.Identification) ?? safeStr(line.ItemReference)
+      if (name && ident) return `${ident} — ${name}`
+      return ident ?? name ?? 'Référence sans nom'
+    }
+
+    case 'IfcBuildingStorey':
+    case 'IfcSpace':
+      return name ?? safeStr(line.LongName) ?? entityType
+
+    default:
+      return name ?? entityType
+  }
+}
+
+function nodeMeta(expressId: number): GraphNode | null {
+  const cached = nodeMetaCache.get(expressId)
+  if (cached) return cached
+  if (!api) return null
+
+  let line: Record<string, unknown>
+  try {
+    line = api.GetLine(modelId, expressId, false) as Record<string, unknown>
+  } catch { return null }
+  if (!line) return null
+
+  const entityType = api.GetNameFromTypeCode(line.type as number) ?? 'Inconnu'
+  const node: GraphNode = {
+    id: `e${expressId}`,
+    kind: classifyKind(entityType),
+    entityType,
+    label: resolveLabel(entityType, line),
+    expressId,
+    globalId: safeStr(line.GlobalId),
+    expandable: (outRels.get(expressId)?.length ?? 0) + (inRels.get(expressId)?.length ?? 0) > 0,
+  }
+  nodeMetaCache.set(expressId, node)
+  return node
+}
+
+interface EdgeAcc {
+  source: string
+  target: string
+  relType: GraphRelType
+  count: number
+  relGlobalId: string | null
+}
+
+/**
+ * Calcule les voisins directs (1 saut) d'un ensemble d'occurrences.
+ * Les nœuds définition et spatiaux restent individuels — c'est tout l'intérêt
+ * de la vue : un matériau partagé par 400 murs n'apparaît qu'une fois. Les
+ * occurrences, elles, sont regroupées par type au-delà du seuil d'éclatement.
+ */
+function neighborsOf(
+  originId: string,
+  memberIds: number[],
+  relTypes: GraphRelType[]
+): GraphPayload {
+  const allowed = new Set(relTypes)
+  const memberSet = new Set(memberIds)
+
+  const nodesById = new Map<string, GraphNode>()
+  const edgesByKey = new Map<string, EdgeAcc>()
+  // Occurrences voisines, regroupées par type avant décision d'éclatement.
+  const occGroups = new Map<string, { ids: Set<number>; rels: Map<GraphRelType, { asSource: boolean; count: number }> }>()
+
+  const consider = (memberId: number, rel: RawRel) => {
+    if (!allowed.has(rel.relType)) return
+    const memberIsRelating = rel.relatingId === memberId
+    const otherId = memberIsRelating ? rel.relatedId : rel.relatingId
+    if (memberSet.has(otherId)) return // relation interne au groupe
+
+    const meta = nodeMeta(otherId)
+    if (!meta) return
+
+    if (meta.kind === 'occurrence') {
+      let g = occGroups.get(meta.entityType)
+      if (!g) {
+        g = { ids: new Set(), rels: new Map() }
+        occGroups.set(meta.entityType, g)
+      }
+      g.ids.add(otherId)
+      const key = rel.relType
+      const cur = g.rels.get(key)
+      if (cur) cur.count++
+      else g.rels.set(key, { asSource: !memberIsRelating, count: 1 })
+      return
+    }
+
+    // Définition ou nœud spatial : conservé tel quel, l'agrégation se fait sur l'arête.
+    nodesById.set(meta.id, meta)
+    const source = memberIsRelating ? originId : meta.id
+    const target = memberIsRelating ? meta.id : originId
+    const key = `${rel.relType}|${source}|${target}`
+    const acc = edgesByKey.get(key)
+    if (acc) {
+      acc.count++
+      acc.relGlobalId = null // plusieurs relations agrégées : plus de GUID unique
+    } else {
+      edgesByKey.set(key, { source, target, relType: rel.relType, count: 1, relGlobalId: rel.relGlobalId })
+    }
+  }
+
+  for (const memberId of memberIds) {
+    const out = outRels.get(memberId)
+    if (out) for (const r of out) consider(memberId, r)
+    const inc = inRels.get(memberId)
+    if (inc) for (const r of inc) consider(memberId, r)
+  }
+
+  // Matérialisation des occurrences voisines : éclatées si peu nombreuses, sinon groupées.
+  for (const [entityType, g] of occGroups.entries()) {
+    const ids = Array.from(g.ids)
+    const explode = ids.length <= GROUP_EXPLODE_THRESHOLD
+
+    for (const [relType, info] of g.rels.entries()) {
+      if (explode) {
+        for (const id of ids) {
+          const meta = nodeMeta(id)
+          if (!meta) continue
+          nodesById.set(meta.id, meta)
+          const source = info.asSource ? meta.id : originId
+          const target = info.asSource ? originId : meta.id
+          const key = `${relType}|${source}|${target}`
+          if (!edgesByKey.has(key)) {
+            edgesByKey.set(key, { source, target, relType, count: 1, relGlobalId: null })
+          }
+        }
+      } else {
+        const groupId = `g:${originId}:${entityType}`
+        groupMembers.set(groupId, ids)
+        nodesById.set(groupId, {
+          id: groupId,
+          kind: 'group',
+          entityType,
+          label: `${ids.length} ${entityType}`,
+          count: ids.length,
+          expandable: true,
+        })
+        const source = info.asSource ? groupId : originId
+        const target = info.asSource ? originId : groupId
+        edgesByKey.set(`${relType}|${source}|${target}`, {
+          source, target, relType, count: info.count, relGlobalId: null,
+        })
+      }
+    }
+  }
+
+  // Plafond de rendu : on garde les voisins les plus significatifs.
+  let nodes = Array.from(nodesById.values())
+  let truncated = false
+  let omittedCount = 0
+
+  if (nodes.length > MAX_EXPANSION_NODES) {
+    const weight = new Map<string, number>()
+    for (const e of edgesByKey.values()) {
+      const other = e.source === originId ? e.target : e.source
+      weight.set(other, (weight.get(other) ?? 0) + e.count)
+    }
+    nodes.sort((a, b) => (weight.get(b.id) ?? 0) - (weight.get(a.id) ?? 0))
+    omittedCount = nodes.length - MAX_EXPANSION_NODES
+    nodes = nodes.slice(0, MAX_EXPANSION_NODES)
+    truncated = true
+  }
+
+  const kept = new Set(nodes.map((n) => n.id))
+  const edges: GraphEdge[] = []
+  for (const [key, e] of edgesByKey.entries()) {
+    const other = e.source === originId ? e.target : e.source
+    if (!kept.has(other)) continue
+    edges.push({
+      id: key,
+      source: e.source,
+      target: e.target,
+      relType: e.relType,
+      count: e.count,
+      relGlobalId: e.relGlobalId,
+    })
+  }
+
+  return { originId, nodes, edges, truncated, omittedCount }
+}
+
+function graphOpenType(entityType: string, relTypes: GraphRelType[]) {
+  if (!api || modelId < 0) return
+  buildRelationIndex(relTypes)
+
+  const typeCode = typeCodeMap.get(entityType)
+  if (typeCode === undefined) {
+    post({ type: 'error', message: `Type inconnu: ${entityType}` })
+    return
+  }
+
+  const lineIds = api.GetLineIDsWithType(modelId, typeCode)
+  const memberIds: number[] = []
+  for (let i = 0; i < lineIds.size(); i++) memberIds.push(lineIds.get(i))
+
+  const rootId = `g:root:${entityType}`
+  groupMembers.set(rootId, memberIds)
+
+  const payload = neighborsOf(rootId, memberIds, relTypes)
+
+  // Le nœud racine est joint au payload pour que le store puisse l'ancrer.
+  payload.nodes.unshift({
+    id: rootId,
+    kind: 'group',
+    entityType,
+    label: `${memberIds.length} ${entityType}`,
+    count: memberIds.length,
+    expandable: true,
+  })
+
+  post({ type: 'graphData', payload })
+}
+
+function graphExpand(nodeId: string, relTypes: GraphRelType[]) {
+  if (!api || modelId < 0) return
+  buildRelationIndex(relTypes)
+
+  let memberIds: number[]
+  if (nodeId.startsWith('g:')) {
+    memberIds = groupMembers.get(nodeId) ?? []
+  } else {
+    memberIds = [Number(nodeId.slice(1))]
+  }
+
+  if (memberIds.length === 0) {
+    post({ type: 'graphData', payload: { originId: nodeId, nodes: [], edges: [], truncated: false, omittedCount: 0 } })
+    return
+  }
+
+  post({ type: 'graphData', payload: neighborsOf(nodeId, memberIds, relTypes) })
+}
+
 self.onmessage = async (e: MessageEvent<WorkerInMessage>) => {
   const msg = e.data
   try {
@@ -491,6 +908,10 @@ self.onmessage = async (e: MessageEvent<WorkerInMessage>) => {
       await selectEntityType(msg.entityType)
     } else if (msg.type === 'search') {
       searchGlobal(msg.query)
+    } else if (msg.type === 'graphOpenType') {
+      graphOpenType(msg.entityType, msg.relTypes)
+    } else if (msg.type === 'graphExpand') {
+      graphExpand(msg.nodeId, msg.relTypes)
     }
   } catch (err) {
     post({ type: 'error', message: String(err) })
