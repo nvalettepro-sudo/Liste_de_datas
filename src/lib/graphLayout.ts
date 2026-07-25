@@ -9,6 +9,12 @@ export interface XY { x: number; y: number }
 interface LayoutNode { id: string }
 interface LayoutEdge { source: string; target: string }
 
+export interface LayoutOptions {
+  nodesep?: number
+  ranksep?: number
+  rankdir?: 'LR' | 'TB'
+}
+
 /**
  * Recalcule un layout hiérarchique complet du graphe avec dagre. Contrairement
  * à un placement en anneau par zone d'expansion, ceci réorganise l'ensemble à
@@ -17,11 +23,18 @@ interface LayoutEdge { source: string; target: string }
  *
  * Signature volontairement minimale (id / source / target) pour être partagée
  * entre le graphe instance (GraphNode/GraphEdge) et la vue d'ensemble par
- * type (TypeGraphNode/TypeGraphEdge).
+ * type (TypeGraphNode/TypeGraphEdge). Cette dernière a des nœuds à très haut
+ * degré (ex. IfcPropertySet relié à la plupart des types) et a besoin d'un
+ * espacement plus large pour rester lisible — d'où les options.
  */
-export function layoutGraph(nodes: LayoutNode[], edges: LayoutEdge[]): Record<string, XY> {
+export function layoutGraph(
+  nodes: LayoutNode[],
+  edges: LayoutEdge[],
+  options: LayoutOptions = {}
+): Record<string, XY> {
+  const { nodesep = 55, ranksep = 130, rankdir = 'LR' } = options
   const g = new dagre.graphlib.Graph()
-  g.setGraph({ rankdir: 'LR', nodesep: 55, ranksep: 130, marginx: 40, marginy: 40 })
+  g.setGraph({ rankdir, nodesep, ranksep, marginx: 40, marginy: 40 })
   g.setDefaultEdgeLabel(() => ({}))
 
   for (const n of nodes) {

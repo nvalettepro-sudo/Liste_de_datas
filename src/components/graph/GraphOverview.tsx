@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -7,6 +7,7 @@ import {
   MarkerType,
   type Node,
   type Edge,
+  type EdgeMouseHandler,
   type NodeMouseHandler,
   type OnNodeDrag,
   type ReactFlowInstance,
@@ -14,11 +15,18 @@ import {
 import '@xyflow/react/dist/style.css'
 
 import { useStore } from '../../store/useStore'
-import { GRAPH_REL_TYPES } from '../../lib/types'
+import { GRAPH_REL_TYPES, type GraphRelType } from '../../lib/types'
 import { REL_META } from '../../lib/graphMeta'
 import { TypeNodeCard, type TypeNodeCardData } from './TypeNodeCard'
 
 const nodeTypes = { typeNode: TypeNodeCard }
+
+interface SelectedEdgeInfo {
+  source: string
+  target: string
+  relType: GraphRelType
+  count: number
+}
 
 export function GraphOverview() {
   const overviewNodes = useStore((s) => s.overviewNodes)
@@ -32,6 +40,7 @@ export function GraphOverview() {
   const setOverviewNodePosition = useStore((s) => s.setOverviewNodePosition)
   const relayoutOverview = useStore((s) => s.relayoutOverview)
   const rfInstance = useRef<ReactFlowInstance | null>(null)
+  const [selectedEdge, setSelectedEdge] = useState<SelectedEdgeInfo | null>(null)
 
   const visibleEdges = useMemo(
     () => overviewEdges.filter((e) => overviewRelTypes.includes(e.relType)),
@@ -60,28 +69,47 @@ export function GraphOverview() {
     [overviewNodes, overviewPositions, visibleNodeIds]
   )
 
+  /**
+   * Pas d'étiquette permanente sur chaque arête : sur une vraie maquette, un
+   * type comme IfcPropertySet se relie à la quasi-totalité des autres types,
+   * et des dizaines d'étiquettes de texte superposées rendent le graphe
+   * illisible. Le détail (relation + compte) s'affiche au clic sur l'arête,
+   * dans le bandeau du haut.
+   */
   const rfEdges: Edge[] = useMemo(
     () =>
       visibleEdges.map((e) => {
         const meta = REL_META[e.relType]
+        const isSelected = selectedEdge?.source === e.source && selectedEdge?.target === e.target
+          && selectedEdge?.relType === e.relType
         return {
           id: e.id,
           source: e.source,
           target: e.target,
-          label: `${meta.label} ×${e.count.toLocaleString('fr-FR')}`,
-          labelStyle: { fill: '#9ca3af', fontSize: 10 },
-          labelBgStyle: { fill: '#0b1220' },
-          style: { stroke: meta.color, strokeWidth: Math.min(1.5 + Math.log10(e.count + 1) * 1.4, 5) },
-          markerEnd: { type: MarkerType.ArrowClosed, color: meta.color, width: 16, height: 16 },
+          style: {
+            stroke: meta.color,
+            strokeWidth: isSelected ? 4 : Math.min(1 + Math.log10(e.count + 1) * 0.9, 3),
+            opacity: isSelected ? 1 : 0.55,
+          },
+          markerEnd: { type: MarkerType.ArrowClosed, color: meta.color, width: 14, height: 14 },
+          data: { relType: e.relType, count: e.count },
         }
       }),
-    [visibleEdges]
+    [visibleEdges, selectedEdge]
   )
 
   const onNodeDoubleClick: NodeMouseHandler = useCallback(
     (_evt, node) => openGraph(node.id, true),
     [openGraph]
   )
+
+  const onEdgeClick: EdgeMouseHandler = useCallback((_evt, edge) => {
+    const data = edge.data as { relType: GraphRelType; count: number } | undefined
+    if (!data) return
+    setSelectedEdge({ source: edge.source, target: edge.target, relType: data.relType, count: data.count })
+  }, [])
+
+  const onPaneClick = useCallback(() => setSelectedEdge(null), [])
 
   const onNodeDragStop: OnNodeDrag = useCallback(
     (_evt, node) => setOverviewNodePosition(node.id, node.position),
@@ -108,6 +136,20 @@ export function GraphOverview() {
         </div>
 
         <div className="flex-1" />
+
+        {selectedEdge && (
+          <span className="text-xs text-gray-200 bg-gray-800 border border-gray-700 rounded px-2 py-1">
+            <span className="font-mono">{selectedEdge.source}</span>
+            {' → '}
+            <span className="font-mono">{selectedEdge.target}</span>
+            {' · '}
+            <span style={{ color: REL_META[selectedEdge.relType].color }}>
+              {REL_META[selectedEdge.relType].label}
+            </span>
+            {' × '}
+            {selectedEdge.count.toLocaleString('fr-FR')}
+          </span>
+        )}
 
         {graphLoading && <span className="text-xs text-blue-400 animate-pulse">Calcul…</span>}
 
@@ -188,6 +230,8 @@ export function GraphOverview() {
               onInit={(instance) => { rfInstance.current = instance }}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeDragStop={onNodeDragStop}
+              onEdgeClick={onEdgeClick}
+              onPaneClick={onPaneClick}
               fitView
               minZoom={0.05}
               maxZoom={2}

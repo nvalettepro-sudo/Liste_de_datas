@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { DEFAULT_REL_TYPES, GRAPH_REL_TYPES } from '../lib/types'
+import { DEFAULT_REL_TYPES } from '../lib/types'
 import { layoutGraph, type XY } from '../lib/graphLayout'
 import type {
   EntityTypeSummary,
@@ -14,6 +14,13 @@ import type {
 } from '../lib/types'
 
 export type { XY }
+
+/**
+ * La vue d'ensemble a des nœuds à très haut degré (ex. IfcPropertySet relié à
+ * la plupart des types) — un espacement plus large que le mode détail limite
+ * les croisements d'arêtes qui la rendent illisible.
+ */
+const OVERVIEW_LAYOUT_OPTIONS = { nodesep: 90, ranksep: 220 }
 
 interface AppState {
   fileName: string | null
@@ -155,7 +162,7 @@ function getOrCreateWorker(set: SetState) {
       set({
         overviewNodes: nodes,
         overviewEdges: edges,
-        overviewPositions: layoutGraph(nodes, edges),
+        overviewPositions: layoutGraph(nodes, edges, OVERVIEW_LAYOUT_OPTIONS),
         graphLoading: false,
         isLoading: false,
         loadPhase: '',
@@ -202,7 +209,11 @@ export const useStore = create<AppState>((set, get) => ({
   overviewNodes: [],
   overviewEdges: [],
   overviewPositions: {},
-  overviewRelTypes: [...GRAPH_REL_TYPES],
+  // IfcRelDefinesByProperties reste décoché par défaut : sur une vraie
+  // maquette, la quasi-totalité des types portent des Psets, ce qui en fait
+  // un hub connecté à presque tout le graphe — un vrai nid d'oiseau à
+  // l'affichage, même si le coût de calcul reste négligeable à cette maille.
+  overviewRelTypes: [...DEFAULT_REL_TYPES],
 
   loadFile: (file: File) => {
     set({
@@ -397,6 +408,6 @@ export const useStore = create<AppState>((set, get) => ({
 
   relayoutOverview: () => {
     const { overviewNodes, overviewEdges } = get()
-    set({ overviewPositions: layoutGraph(overviewNodes, overviewEdges) })
+    set({ overviewPositions: layoutGraph(overviewNodes, overviewEdges, OVERVIEW_LAYOUT_OPTIONS) })
   },
 }))
