@@ -136,6 +136,34 @@ export interface GraphPayload {
   omittedCount: number
 }
 
+/**
+ * Vue d'ensemble (v2.1) : le graphe complet de la maquette, à la maille
+ * "type d'entité IFC" plutôt qu'instance. Un nœud par type présent dans le
+ * fichier, une arête par relation IFC officielle reliant deux types, avec le
+ * nombre réel d'occurrences de cette relation. Toujours calculé sur les 6
+ * relations du scope — à ce grain, IfcRelDefinesByProperties ne coûte que
+ * quelques arêtes de plus, pas une explosion d'instances.
+ */
+export interface TypeGraphNode {
+  /** Égal à `entityType` — uniformise l'interface avec GraphNode. */
+  id: string
+  entityType: string
+  count: number
+}
+
+export interface TypeGraphEdge {
+  id: string
+  source: string
+  target: string
+  relType: GraphRelType
+  count: number
+}
+
+export interface TypeGraphPayload {
+  nodes: TypeGraphNode[]
+  edges: TypeGraphEdge[]
+}
+
 export type WorkerInMessage =
   | { type: 'init'; wasmPath: string }
   | { type: 'load'; buffer: ArrayBuffer }
@@ -143,6 +171,7 @@ export type WorkerInMessage =
   | { type: 'search'; query: string }
   | { type: 'graphOpenType'; entityType: string; relTypes: GraphRelType[] }
   | { type: 'graphExpand'; nodeId: string; relTypes: GraphRelType[] }
+  | { type: 'graphOverview' }
 
 export type WorkerOutMessage =
   | { type: 'progress'; percent: number; phase: string }
@@ -150,4 +179,5 @@ export type WorkerOutMessage =
   | { type: 'aggregated'; data: AggregatedEntityData }
   | { type: 'searchResults'; query: string; results: GlobalSearchResult[] }
   | { type: 'graphData'; payload: GraphPayload }
+  | { type: 'graphOverviewData'; payload: TypeGraphPayload }
   | { type: 'error'; message: string }

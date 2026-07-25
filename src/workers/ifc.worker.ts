@@ -1,4 +1,5 @@
 import * as WebIFC from 'web-ifc'
+import { GRAPH_REL_TYPES } from '../lib/types'
 import type {
   EntityTypeSummary,
   PsetData,
@@ -14,6 +15,8 @@ import type {
   GraphNode,
   GraphEdge,
   GraphPayload,
+  TypeGraphNode,
+  TypeGraphEdge,
   WorkerInMessage,
   WorkerOutMessage,
 } from '../lib/types'
@@ -185,6 +188,9 @@ async function loadFile(buffer: ArrayBuffer) {
   nodeMetaCache.clear()
   groupMembers.clear()
   indexedRelTypes = new Set()
+  typeNameCache.clear()
+  typeGraphCounts.clear()
+  entityTypeCounts.clear()
 
   try {
     const header = api.GetModelSchema(modelId)
@@ -213,6 +219,7 @@ async function loadFile(buffer: ArrayBuffer) {
     if (count === 0) continue
 
     typeCodeMap.set(typeName, typeID)
+    entityTypeCounts.set(typeName, count)
     typeSummaries.push({ type: typeName, count, storeyBreakdown: {} })
 
     if (i % 50 === 0) {
@@ -540,12 +547,33 @@ const nodeMetaCache = new Map<number, GraphNode>()
 /** Membres des nœuds groupés déjà émis, pour pouvoir les ré-étendre. */
 const groupMembers = new Map<string, number[]>()
 
+/** Type d'entité par expressId — cache léger, séparé de nodeMetaCache qui porte le libellé complet. */
+const typeNameCache = new Map<number, string>()
+/** Occurrences par (relType, typeRelating, typeRelated) — alimente la vue d'ensemble. */
+const typeGraphCounts = new Map<string, number>()
+/** Nombre total d'instances par type IFC, capturé pendant l'analyse initiale. */
+const entityTypeCounts = new Map<string, number>()
+
 let indexedRelTypes = new Set<GraphRelType>()
 
 function pushRel(map: Map<number, RawRel[]>, key: number, rel: RawRel) {
   const arr = map.get(key)
   if (arr) arr.push(rel)
   else map.set(key, [rel])
+}
+
+function getEntityType(expressId: number): string | null {
+  const cached = typeNameCache.get(expressId)
+  if (cached) return cached
+  if (!api) return null
+  let line: Record<string, unknown>
+  try {
+    line = api.GetLine(modelId, expressId, false) as Record<string, unknown>
+  } catch { return null }
+  if (!line) return null
+  const t = api.GetNameFromTypeCode(line.type as number)
+  if (t) typeNameCache.set(expressId, t)
+  return t ?? null
 }
 
 function refIds(raw: unknown): number[] {
@@ -604,10 +632,17 @@ function buildRelationIndex(relTypes: GraphRelType[]) {
       const relGlobalId = safeStr(rel.GlobalId)
 
       for (const relatingId of relatingIds) {
+        const relatingType = getEntityType(relatingId)
         for (const relatedId of relatedIds) {
           const raw: RawRel = { relType, relGlobalId, relatingId, relatedId }
           pushRel(outRels, relatingId, raw)
           pushRel(inRels, relatedId, raw)
+
+          const relatedType = getEntityType(relatedId)
+          if (relatingType && relatedType) {
+            const key = `${relType}|${relatingType}|${relatedType}`
+            typeGraphCounts.set(key, (typeGraphCounts.get(key) ?? 0) + 1)
+          }
         }
       }
     }
@@ -897,6 +932,36 @@ function graphExpand(nodeId: string, relTypes: GraphRelType[]) {
   post({ type: 'graphData', payload: neighborsOf(nodeId, memberIds, relTypes) })
 }
 
+/**
+ * Vue d'ensemble de la maquette : un nœud par type IFC présent, une arête par
+ * relation officielle entre deux types avec son compte réel d'occurrences.
+ * Toujours calculée sur les 6 relations du scope — à cette maille,
+ * IfcRelDefinesByProperties n'ajoute que quelques arêtes, pas une explosion
+ * d'instances comme au niveau détail.
+ */
+function graphOverview() {
+  if (!api || modelId < 0) return
+  buildRelationIndex([...GRAPH_REL_TYPES])
+
+  const involved = new Set<string>()
+  const edges: TypeGraphEdge[] = []
+
+  for (const [key, count] of typeGraphCounts.entries()) {
+    const [relType, relatingType, relatedType] = key.split('|') as [GraphRelType, string, string]
+    involved.add(relatingType)
+    involved.add(relatedType)
+    edges.push({ id: key, source: relatingType, target: relatedType, relType, count })
+  }
+
+  const nodes: TypeGraphNode[] = Array.from(involved).map((t) => ({
+    id: t,
+    entityType: t,
+    count: entityTypeCounts.get(t) ?? 0,
+  }))
+
+  post({ type: 'graphOverviewData', payload: { nodes, edges } })
+}
+
 self.onmessage = async (e: MessageEvent<WorkerInMessage>) => {
   const msg = e.data
   try {
@@ -912,6 +977,8 @@ self.onmessage = async (e: MessageEvent<WorkerInMessage>) => {
       graphOpenType(msg.entityType, msg.relTypes)
     } else if (msg.type === 'graphExpand') {
       graphExpand(msg.nodeId, msg.relTypes)
+    } else if (msg.type === 'graphOverview') {
+      graphOverview()
     }
   } catch (err) {
     post({ type: 'error', message: String(err) })

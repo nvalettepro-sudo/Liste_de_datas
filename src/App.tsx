@@ -5,6 +5,7 @@ import { InfoPanel } from './components/InfoPanel'
 import { FileDropZone } from './components/FileDropZone'
 import { SearchResultsPanel } from './components/SearchResultsPanel'
 import { GraphView } from './components/graph/GraphView'
+import { GraphOverview } from './components/graph/GraphOverview'
 
 export function App() {
   const fileName = useStore((s) => s.fileName)
@@ -13,6 +14,7 @@ export function App() {
   const isLoading = useStore((s) => s.isLoading)
   const globalSearchResults = useStore((s) => s.globalSearchResults)
   const graphOpen = useStore((s) => s.graphOpen)
+  const graphView = useStore((s) => s.graphView)
 
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
@@ -26,7 +28,7 @@ export function App() {
         </div>
         <InfoPanel />
         {globalSearchResults !== null && <SearchResultsPanel />}
-        {graphOpen && <GraphView />}
+        {graphOpen && (graphView === 'overview' ? <GraphOverview /> : <GraphView />)}
       </div>
 
       {error && (

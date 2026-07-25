@@ -1,0 +1,214 @@
+import { useCallback, useMemo, useRef } from 'react'
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  MarkerType,
+  type Node,
+  type Edge,
+  type NodeMouseHandler,
+  type OnNodeDrag,
+  type ReactFlowInstance,
+} from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
+
+import { useStore } from '../../store/useStore'
+import { GRAPH_REL_TYPES } from '../../lib/types'
+import { REL_META } from '../../lib/graphMeta'
+import { TypeNodeCard, type TypeNodeCardData } from './TypeNodeCard'
+
+const nodeTypes = { typeNode: TypeNodeCard }
+
+export function GraphOverview() {
+  const overviewNodes = useStore((s) => s.overviewNodes)
+  const overviewEdges = useStore((s) => s.overviewEdges)
+  const overviewPositions = useStore((s) => s.overviewPositions)
+  const overviewRelTypes = useStore((s) => s.overviewRelTypes)
+  const graphLoading = useStore((s) => s.graphLoading)
+  const closeGraph = useStore((s) => s.closeGraph)
+  const openGraph = useStore((s) => s.openGraph)
+  const toggleOverviewRelType = useStore((s) => s.toggleOverviewRelType)
+  const setOverviewNodePosition = useStore((s) => s.setOverviewNodePosition)
+  const relayoutOverview = useStore((s) => s.relayoutOverview)
+  const rfInstance = useRef<ReactFlowInstance | null>(null)
+
+  const visibleEdges = useMemo(
+    () => overviewEdges.filter((e) => overviewRelTypes.includes(e.relType)),
+    [overviewEdges, overviewRelTypes]
+  )
+
+  const visibleNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const e of visibleEdges) {
+      ids.add(e.source)
+      ids.add(e.target)
+    }
+    return ids
+  }, [visibleEdges])
+
+  const rfNodes: Node[] = useMemo(
+    () =>
+      overviewNodes
+        .filter((n) => visibleNodeIds.has(n.id))
+        .map((n) => ({
+          id: n.id,
+          type: 'typeNode',
+          position: overviewPositions[n.id] ?? { x: 0, y: 0 },
+          data: { node: n } satisfies TypeNodeCardData,
+        })),
+    [overviewNodes, overviewPositions, visibleNodeIds]
+  )
+
+  const rfEdges: Edge[] = useMemo(
+    () =>
+      visibleEdges.map((e) => {
+        const meta = REL_META[e.relType]
+        return {
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          label: `${meta.label} ×${e.count.toLocaleString('fr-FR')}`,
+          labelStyle: { fill: '#9ca3af', fontSize: 10 },
+          labelBgStyle: { fill: '#0b1220' },
+          style: { stroke: meta.color, strokeWidth: Math.min(1.5 + Math.log10(e.count + 1) * 1.4, 5) },
+          markerEnd: { type: MarkerType.ArrowClosed, color: meta.color, width: 16, height: 16 },
+        }
+      }),
+    [visibleEdges]
+  )
+
+  const onNodeDoubleClick: NodeMouseHandler = useCallback(
+    (_evt, node) => openGraph(node.id, true),
+    [openGraph]
+  )
+
+  const onNodeDragStop: OnNodeDrag = useCallback(
+    (_evt, node) => setOverviewNodePosition(node.id, node.position),
+    [setOverviewNodePosition]
+  )
+
+  const centerView = useCallback(() => {
+    rfInstance.current?.fitView({ padding: 0.2, duration: 300 })
+  }, [])
+
+  const handleRelayout = useCallback(() => {
+    relayoutOverview()
+    requestAnimationFrame(() => centerView())
+  }, [relayoutOverview, centerView])
+
+  return (
+    <div className="absolute inset-0 z-30 flex flex-col bg-gray-950">
+      <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2 border-b border-gray-800 bg-gray-900">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-gray-100 leading-tight">
+            Vue d'ensemble de la maquette
+          </p>
+          <p className="text-[11px] text-gray-500">Relations IFC réelles, agrégées par type</p>
+        </div>
+
+        <div className="flex-1" />
+
+        {graphLoading && <span className="text-xs text-blue-400 animate-pulse">Calcul…</span>}
+
+        <span className="text-[11px] text-gray-500">
+          {rfNodes.length} type{rfNodes.length > 1 ? 's' : ''} · {rfEdges.length} relation
+          {rfEdges.length > 1 ? 's' : ''}
+        </span>
+
+        <button
+          onClick={centerView}
+          className="px-2 py-1 text-xs text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors"
+          title="Recentrer le graphe dans la fenêtre"
+        >
+          ⊙ Centrer
+        </button>
+
+        <button
+          onClick={handleRelayout}
+          className="px-2 py-1 text-xs text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors"
+          title="Recalculer une disposition claire du graphe"
+        >
+          ⟲ Réorganiser
+        </button>
+
+        <button
+          onClick={() => closeGraph()}
+          className="px-2 py-1 text-xs text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors"
+        >
+          ✕ Fermer
+        </button>
+      </div>
+
+      <div className="flex flex-1 min-h-0">
+        <div className="w-56 flex-shrink-0 border-r border-gray-800 bg-gray-900 overflow-y-auto px-3 py-3">
+          <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+            Relations affichées
+          </h3>
+          <div className="space-y-1.5">
+            {GRAPH_REL_TYPES.map((rel) => {
+              const meta = REL_META[rel]
+              const checked = overviewRelTypes.includes(rel)
+              return (
+                <label key={rel} className="flex items-start gap-2 cursor-pointer group" title={meta.hint}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleOverviewRelType(rel)}
+                    className="mt-0.5 accent-blue-600"
+                  />
+                  <span
+                    className="text-xs text-gray-300 group-hover:text-gray-100"
+                    style={{ color: checked ? meta.color : undefined }}
+                  >
+                    {meta.label}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+
+          <p className="mt-4 text-[10px] text-gray-600 leading-snug">
+            Double-clic sur un type pour explorer ses instances en détail.
+          </p>
+        </div>
+
+        <div className="flex-1 min-w-0 relative">
+          {rfNodes.length === 0 && !graphLoading ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <p className="text-gray-600 text-sm italic px-8 text-center">
+                Aucune relation à afficher avec les filtres actuels.
+              </p>
+            </div>
+          ) : (
+            <ReactFlow
+              nodes={rfNodes}
+              edges={rfEdges}
+              nodeTypes={nodeTypes}
+              onInit={(instance) => { rfInstance.current = instance }}
+              onNodeDoubleClick={onNodeDoubleClick}
+              onNodeDragStop={onNodeDragStop}
+              fitView
+              minZoom={0.05}
+              maxZoom={2}
+              proOptions={{ hideAttribution: true }}
+            >
+              <Background color="#1f2937" gap={20} />
+              <Controls className="!bg-gray-900 !border-gray-700" />
+              <MiniMap
+                pannable
+                zoomable
+                bgColor="#0b1220"
+                maskColor="rgba(3,7,18,0.75)"
+                style={{ width: 150, height: 100 }}
+                className="!border !border-gray-800"
+                nodeColor="#38bdf8"
+                nodeStrokeWidth={3}
+              />
+            </ReactFlow>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

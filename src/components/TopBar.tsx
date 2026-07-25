@@ -20,6 +20,7 @@ export function TopBar() {
   const clearGlobalSearch = useStore((s) => s.clearGlobalSearch)
   const isSearching = useStore((s) => s.isSearching)
   const loadFile = useStore((s) => s.loadFile)
+  const openGraphOverview = useStore((s) => s.openGraphOverview)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -79,6 +80,16 @@ export function TopBar() {
           >
             {ifcVersion}
           </span>
+        )}
+
+        {fileName && (
+          <button
+            onClick={openGraphOverview}
+            className="px-2 py-1 text-xs text-blue-300 border border-blue-800 hover:border-blue-600 hover:text-blue-200 transition-colors flex-shrink-0"
+            title="Voir l'ensemble des relations IFC de la maquette"
+          >
+            Graphe global
+          </button>
         )}
 
         <div className="flex-1" />

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { DEFAULT_REL_TYPES } from '../lib/types'
+import { DEFAULT_REL_TYPES, GRAPH_REL_TYPES } from '../lib/types'
 import { layoutGraph, type XY } from '../lib/graphLayout'
 import type {
   EntityTypeSummary,
@@ -8,6 +8,8 @@ import type {
   GraphNode,
   GraphEdge,
   GraphRelType,
+  TypeGraphNode,
+  TypeGraphEdge,
   WorkerOutMessage,
 } from '../lib/types'
 
@@ -29,6 +31,10 @@ interface AppState {
 
   /* --- Vue graphe (v2) --- */
   graphOpen: boolean
+  /** 'overview' = maquette entière (maille type) ; 'detail' = exploration instance. */
+  graphView: 'overview' | 'detail'
+  /** Vrai si le mode détail a été atteint par drill-down depuis la vue d'ensemble. */
+  graphCameFromOverview: boolean
   graphLoading: boolean
   graphRootId: string | null
   graphNodes: GraphNode[]
@@ -41,6 +47,12 @@ interface AppState {
   graphTruncated: boolean
   graphOmitted: number
 
+  /* --- Vue d'ensemble (v2.1) --- */
+  overviewNodes: TypeGraphNode[]
+  overviewEdges: TypeGraphEdge[]
+  overviewPositions: Record<string, XY>
+  overviewRelTypes: GraphRelType[]
+
   loadFile: (file: File) => void
   closeFile: () => void
   selectType: (type: string) => void
@@ -49,7 +61,7 @@ interface AppState {
   clearGlobalSearch: () => void
   clearError: () => void
 
-  openGraph: (entityType: string) => void
+  openGraph: (entityType: string, fromOverview?: boolean) => void
   closeGraph: () => void
   expandGraphNode: (nodeId: string) => void
   setGraphNodePosition: (nodeId: string, pos: XY) => void
@@ -57,6 +69,11 @@ interface AppState {
   toggleGraphRelType: (relType: GraphRelType) => void
   setGraphEntityFilter: (types: string[] | null) => void
   setGraphStoreyFilter: (nodeId: string | null) => void
+
+  openGraphOverview: () => void
+  toggleOverviewRelType: (relType: GraphRelType) => void
+  setOverviewNodePosition: (nodeId: string, pos: XY) => void
+  relayoutOverview: () => void
 }
 
 let worker: Worker | null = null
@@ -133,6 +150,16 @@ function getOrCreateWorker(set: SetState) {
           loadPhase: '',
         }
       })
+    } else if (msg.type === 'graphOverviewData') {
+      const { nodes, edges } = msg.payload
+      set({
+        overviewNodes: nodes,
+        overviewEdges: edges,
+        overviewPositions: layoutGraph(nodes, edges),
+        graphLoading: false,
+        isLoading: false,
+        loadPhase: '',
+      })
     } else if (msg.type === 'error') {
       set({ error: msg.message, isLoading: false, isSearching: false, graphLoading: false })
     }
@@ -158,6 +185,8 @@ export const useStore = create<AppState>((set, get) => ({
   isSearching: false,
 
   graphOpen: false,
+  graphView: 'overview',
+  graphCameFromOverview: false,
   graphLoading: false,
   graphRootId: null,
   graphNodes: [],
@@ -169,6 +198,11 @@ export const useStore = create<AppState>((set, get) => ({
   graphStoreyFilter: null,
   graphTruncated: false,
   graphOmitted: 0,
+
+  overviewNodes: [],
+  overviewEdges: [],
+  overviewPositions: {},
+  overviewRelTypes: [...GRAPH_REL_TYPES],
 
   loadFile: (file: File) => {
     set({
@@ -187,6 +221,9 @@ export const useStore = create<AppState>((set, get) => ({
       graphPositions: {},
       graphExpanded: [],
       graphRootId: null,
+      overviewNodes: [],
+      overviewEdges: [],
+      overviewPositions: {},
     })
     const w = getOrCreateWorker(set)
     file.arrayBuffer().then((buf) => {
@@ -223,6 +260,9 @@ export const useStore = create<AppState>((set, get) => ({
       graphStoreyFilter: null,
       graphTruncated: false,
       graphOmitted: 0,
+      overviewNodes: [],
+      overviewEdges: [],
+      overviewPositions: {},
     })
   },
 
@@ -256,10 +296,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   clearError: () => set({ error: null }),
 
-  openGraph: (entityType: string) => {
+  openGraph: (entityType: string, fromOverview = false) => {
     if (!worker) return
     set({
       graphOpen: true,
+      graphView: 'detail',
+      graphCameFromOverview: fromOverview,
       graphLoading: true,
       graphNodes: [],
       graphEdges: [],
@@ -274,7 +316,15 @@ export const useStore = create<AppState>((set, get) => ({
     worker.postMessage({ type: 'graphOpenType', entityType, relTypes: get().graphRelTypes })
   },
 
-  closeGraph: () => set({ graphOpen: false }),
+  closeGraph: () => {
+    // Revenir à la vue d'ensemble plutôt que tout fermer si on y est arrivé
+    // par drill-down : elle est déjà calculée, pas besoin de la refaire.
+    if (get().graphCameFromOverview) {
+      set({ graphView: 'overview', graphCameFromOverview: false })
+    } else {
+      set({ graphOpen: false })
+    }
+  },
 
   expandGraphNode: (nodeId: string) => {
     if (!worker) return
@@ -319,4 +369,34 @@ export const useStore = create<AppState>((set, get) => ({
   setGraphEntityFilter: (types: string[] | null) => set({ graphEntityFilter: types }),
 
   setGraphStoreyFilter: (nodeId: string | null) => set({ graphStoreyFilter: nodeId }),
+
+  openGraphOverview: () => {
+    if (!worker) return
+    set({
+      graphOpen: true,
+      graphView: 'overview',
+      graphCameFromOverview: false,
+      graphLoading: true,
+    })
+    worker.postMessage({ type: 'graphOverview' })
+  },
+
+  /** Filtrage purement client : la vue d'ensemble contient déjà les 6 relations. */
+  toggleOverviewRelType: (relType: GraphRelType) => {
+    const cur = get().overviewRelTypes
+    set({
+      overviewRelTypes: cur.includes(relType)
+        ? cur.filter((t) => t !== relType)
+        : [...cur, relType],
+    })
+  },
+
+  setOverviewNodePosition: (nodeId: string, pos: XY) => {
+    set((prev) => ({ overviewPositions: { ...prev.overviewPositions, [nodeId]: pos } }))
+  },
+
+  relayoutOverview: () => {
+    const { overviewNodes, overviewEdges } = get()
+    set({ overviewPositions: layoutGraph(overviewNodes, overviewEdges) })
+  },
 }))
