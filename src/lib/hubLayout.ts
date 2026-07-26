@@ -21,36 +21,61 @@ const HUB_GAP = 24
 const TARGET_RATIO = 1905 / 1129
 
 /**
- * Rattache chaque type au hub de relation dont le poids (nombre
- * d'occurrences) est le plus fort pour lui. Sert à la fois au calcul du
- * layout (regroupement en couloirs) et au déplacement de groupe dans
- * l'interface — déplacer un hub doit entraîner avec lui les mêmes types que
- * ceux qu'il a "sous lui" dans le layout.
+ * Ordre de priorité IFC pour le rattachement d'un type à un hub — pas un
+ * simple classement par volume. La structure spatiale (où se trouve
+ * l'élément) et la hiérarchie d'agrégation sont les relations qui
+ * organisent réellement une maquette IFC ; le type définit sa nature.
+ * Matériau, Classification et Psets sont des attributs qui peuvent
+ * s'appliquer à n'importe quel élément en grand nombre — les laisser
+ * dominer le rattachement (par comptage brut) plaçait des éléments comme
+ * IfcColumn ou IfcBeam sous "Matériau" au lieu de leur position réelle,
+ * simplement parce que ces relations comptent plus d'occurrences.
  */
-export function computeHomeHubs(nodes: HubGraphNode[], edges: HubGraphEdge[]): Map<string, string> {
-  const hubIds = new Set(nodes.filter((n) => n.kind === 'hub').map((n) => n.id))
+export const HOME_HUB_PRIORITY: readonly GraphRelType[] = [
+  'IfcRelContainedInSpatialStructure',
+  'IfcRelAggregates',
+  'IfcRelDefinesByType',
+  'IfcRelAssociatesMaterial',
+  'IfcRelAssociatesClassification',
+  'IfcRelDefinesByProperties',
+]
 
-  const weight = new Map<string, Map<string, number>>()
+/**
+ * Rattache chaque type au hub de relation le plus prioritaire selon la
+ * norme IFC parmi ceux qu'il touche réellement (pas au hub le plus
+ * volumineux). Sert à la fois au calcul du layout (regroupement en
+ * couloirs) et au déplacement de groupe dans l'interface — déplacer un hub
+ * doit entraîner avec lui les mêmes types que ceux qu'il a "sous lui" dans
+ * le layout.
+ */
+export function computeHomeHubs(
+  nodes: HubGraphNode[],
+  edges: HubGraphEdge[],
+  priority: readonly GraphRelType[] = HOME_HUB_PRIORITY
+): Map<string, string> {
+  const hubRelById = new Map<string, GraphRelType>()
+  for (const n of nodes) {
+    if (n.kind === 'hub' && n.relType) hubRelById.set(n.id, n.relType)
+  }
+
+  const touchedHubs = new Map<string, Set<string>>()
   for (const e of edges) {
-    const typeId = hubIds.has(e.source) ? e.target : e.source
-    const hubId = hubIds.has(e.source) ? e.source : e.target
-    if (!hubIds.has(hubId) || typeId === hubId) continue
-    if (!weight.has(typeId)) weight.set(typeId, new Map())
-    const m = weight.get(typeId)!
-    m.set(hubId, (m.get(hubId) ?? 0) + e.count)
+    const sourceIsHub = hubRelById.has(e.source)
+    const hubId = sourceIsHub ? e.source : e.target
+    const typeId = sourceIsHub ? e.target : e.source
+    if (!hubRelById.has(hubId) || typeId === hubId) continue
+    if (!touchedHubs.has(typeId)) touchedHubs.set(typeId, new Set())
+    touchedHubs.get(typeId)!.add(hubId)
   }
 
   const home = new Map<string, string>()
-  for (const [typeId, m] of weight.entries()) {
-    let bestHub = ''
-    let bestW = -1
-    for (const [hubId, w] of m.entries()) {
-      if (w > bestW) {
-        bestW = w
-        bestHub = hubId
-      }
+  for (const [typeId, hubIds] of touchedHubs.entries()) {
+    let chosen: string | undefined
+    for (const rel of priority) {
+      chosen = Array.from(hubIds).find((hubId) => hubRelById.get(hubId) === rel)
+      if (chosen) break
     }
-    if (bestHub) home.set(typeId, bestHub)
+    home.set(typeId, chosen ?? Array.from(hubIds)[0])
   }
   return home
 }
