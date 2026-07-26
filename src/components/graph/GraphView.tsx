@@ -18,8 +18,10 @@ import { REL_META } from '../../lib/graphMeta'
 import { IFC_FR } from '../../lib/ifcTranslations'
 import { GraphNodeCard, type GraphNodeCardData } from './GraphNodeCard'
 import { GraphFilters } from './GraphFilters'
+import { FloatingEdge } from './FloatingEdge'
 
 const nodeTypes = { ifcNode: GraphNodeCard }
+const edgeTypes = { floating: FloatingEdge }
 
 const MINIMAP_COLORS: Record<string, string> = {
   definition: '#a78bfa',
@@ -100,6 +102,7 @@ export function GraphView() {
             id: e.id,
             source: e.source,
             target: e.target,
+            type: 'floating',
             label: e.count > 1 ? `×${e.count}` : undefined,
             labelStyle: { fill: '#9ca3af', fontSize: 10 },
             labelBgStyle: { fill: '#111827' },
@@ -201,6 +204,7 @@ export function GraphView() {
               nodes={rfNodes}
               edges={rfEdges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onInit={(instance) => { rfInstance.current = instance }}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeDragStop={onNodeDragStop}

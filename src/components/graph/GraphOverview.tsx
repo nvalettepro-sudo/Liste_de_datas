@@ -20,8 +20,10 @@ import { REL_META } from '../../lib/graphMeta'
 import { computeHomeHubs } from '../../lib/hubLayout'
 import { TypeNodeCard, type TypeNodeCardData } from './TypeNodeCard'
 import { HubNodeCard, type HubNodeCardData } from './HubNodeCard'
+import { FloatingEdge } from './FloatingEdge'
 
 const nodeTypes = { typeNode: TypeNodeCard, hubNode: HubNodeCard }
+const edgeTypes = { floating: FloatingEdge }
 
 interface SelectedEdgeInfo {
   sourceLabel: string
@@ -107,6 +109,7 @@ export function GraphOverview() {
           id: e.id,
           source: e.source,
           target: e.target,
+          type: 'floating',
           style: {
             stroke: meta.color,
             strokeWidth: isSelected ? 4 : Math.min(1 + Math.log10(e.count + 1) * 0.9, 3),
@@ -285,6 +288,7 @@ export function GraphOverview() {
               nodes={rfNodes}
               edges={rfEdges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onInit={(instance) => { rfInstance.current = instance }}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeDrag={onNodeDrag}
