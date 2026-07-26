@@ -21,29 +21,15 @@ const HUB_GAP = 24
 const TARGET_RATIO = 1905 / 1129
 
 /**
- * Dispose le graphe à hubs en couloirs : un couloir par relation IFC active,
- * le hub en en-tête et les types qui lui sont rattachés repliés en grille
- * dessous. Remplace le layout dagre générique, qui classait les types par
- * distance de calcul dans le graphe — un critère sans rapport avec la norme
- * IFC — plutôt que par la relation qui les relie réellement.
- *
- * Un type relié à plusieurs hubs est rattaché à celui dont le poids (nombre
- * d'occurrences de la relation) est le plus fort ; les arêtes vers ses
- * autres hubs restent tracées, elles traversent simplement les couloirs.
+ * Rattache chaque type au hub de relation dont le poids (nombre
+ * d'occurrences) est le plus fort pour lui. Sert à la fois au calcul du
+ * layout (regroupement en couloirs) et au déplacement de groupe dans
+ * l'interface — déplacer un hub doit entraîner avec lui les mêmes types que
+ * ceux qu'il a "sous lui" dans le layout.
  */
-export function layoutHubGraph(
-  nodes: HubGraphNode[],
-  edges: HubGraphEdge[],
-  relOrder: readonly GraphRelType[]
-): Record<string, XY> {
-  const hubs = nodes.filter((n): n is HubGraphNode & { relType: GraphRelType } => n.kind === 'hub' && !!n.relType)
-  const hubIds = new Set(hubs.map((h) => h.id))
+export function computeHomeHubs(nodes: HubGraphNode[], edges: HubGraphEdge[]): Map<string, string> {
+  const hubIds = new Set(nodes.filter((n) => n.kind === 'hub').map((n) => n.id))
 
-  const orderedHubs = relOrder
-    .map((rel) => hubs.find((h) => h.relType === rel))
-    .filter((h): h is HubGraphNode & { relType: GraphRelType } => !!h)
-
-  // Poids type -> hub : quel hub "pèse" le plus pour ce type.
   const weight = new Map<string, Map<string, number>>()
   for (const e of edges) {
     const typeId = hubIds.has(e.source) ? e.target : e.source
@@ -66,6 +52,32 @@ export function layoutHubGraph(
     }
     if (bestHub) home.set(typeId, bestHub)
   }
+  return home
+}
+
+/**
+ * Dispose le graphe à hubs en couloirs : un couloir par relation IFC active,
+ * le hub en en-tête et les types qui lui sont rattachés repliés en grille
+ * dessous. Remplace le layout dagre générique, qui classait les types par
+ * distance de calcul dans le graphe — un critère sans rapport avec la norme
+ * IFC — plutôt que par la relation qui les relie réellement.
+ *
+ * Un type relié à plusieurs hubs est rattaché à celui dont le poids (nombre
+ * d'occurrences de la relation) est le plus fort ; les arêtes vers ses
+ * autres hubs restent tracées, elles traversent simplement les couloirs.
+ */
+export function layoutHubGraph(
+  nodes: HubGraphNode[],
+  edges: HubGraphEdge[],
+  relOrder: readonly GraphRelType[]
+): Record<string, XY> {
+  const hubs = nodes.filter((n): n is HubGraphNode & { relType: GraphRelType } => n.kind === 'hub' && !!n.relType)
+
+  const orderedHubs = relOrder
+    .map((rel) => hubs.find((h) => h.relType === rel))
+    .filter((h): h is HubGraphNode & { relType: GraphRelType } => !!h)
+
+  const home = computeHomeHubs(nodes, edges)
 
   const laneMembers = new Map<string, string[]>()
   for (const h of orderedHubs) laneMembers.set(h.id, [])

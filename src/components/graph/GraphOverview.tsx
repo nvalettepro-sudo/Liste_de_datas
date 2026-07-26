@@ -17,6 +17,7 @@ import '@xyflow/react/dist/style.css'
 import { useStore } from '../../store/useStore'
 import { GRAPH_REL_TYPES, type GraphRelType } from '../../lib/types'
 import { REL_META } from '../../lib/graphMeta'
+import { computeHomeHubs } from '../../lib/hubLayout'
 import { TypeNodeCard, type TypeNodeCardData } from './TypeNodeCard'
 import { HubNodeCard, type HubNodeCardData } from './HubNodeCard'
 
@@ -39,6 +40,7 @@ export function GraphOverview() {
   const openGraph = useStore((s) => s.openGraph)
   const toggleOverviewRelType = useStore((s) => s.toggleOverviewRelType)
   const setOverviewNodePosition = useStore((s) => s.setOverviewNodePosition)
+  const moveOverviewGroup = useStore((s) => s.moveOverviewGroup)
   const relayoutOverview = useStore((s) => s.relayoutOverview)
   const rfInstance = useRef<ReactFlowInstance | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdgeInfo | null>(null)
@@ -48,6 +50,20 @@ export function GraphOverview() {
     for (const n of overviewNodes) m.set(n.id, n.label)
     return m
   }, [overviewNodes])
+
+  /**
+   * Membres de chaque groupe (mêmes rattachements que le layout en couloirs) :
+   * déplacer un hub déplace avec lui les types qui lui sont rattachés.
+   */
+  const groupMembers = useMemo(() => {
+    const home = computeHomeHubs(overviewNodes, overviewEdges)
+    const byHub = new Map<string, string[]>()
+    for (const [typeId, hubId] of home.entries()) {
+      if (!byHub.has(hubId)) byHub.set(hubId, [])
+      byHub.get(hubId)!.push(typeId)
+    }
+    return byHub
+  }, [overviewNodes, overviewEdges])
 
   const visibleEdges = useMemo(
     () => overviewEdges.filter((e) => overviewRelTypes.includes(e.relType)),
@@ -139,6 +155,27 @@ export function GraphOverview() {
   )
 
   const onPaneClick = useCallback(() => setSelectedEdge(null), [])
+
+  /**
+   * Le hub sert de poignée pour son groupe : le déplacer entraîne avec lui
+   * tous les types qui lui sont rattachés, comme un seul bloc. Le delta est
+   * calculé à chaque frame par rapport à la dernière position connue du hub
+   * (lue directement dans le store pour rester exacte pendant le drag).
+   */
+  const onNodeDrag: OnNodeDrag = useCallback(
+    (_evt, node) => {
+      if (!node.id.startsWith('hub:')) return
+      const members = groupMembers.get(node.id)
+      if (!members || members.length === 0) return
+      const prevPos = useStore.getState().overviewPositions[node.id]
+      if (!prevPos) return
+      const dx = node.position.x - prevPos.x
+      const dy = node.position.y - prevPos.y
+      if (dx === 0 && dy === 0) return
+      moveOverviewGroup(node.id, members, dx, dy)
+    },
+    [groupMembers, moveOverviewGroup]
+  )
 
   const onNodeDragStop: OnNodeDrag = useCallback(
     (_evt, node) => setOverviewNodePosition(node.id, node.position),
@@ -263,6 +300,7 @@ export function GraphOverview() {
               nodeTypes={nodeTypes}
               onInit={(instance) => { rfInstance.current = instance }}
               onNodeDoubleClick={onNodeDoubleClick}
+              onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
               onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}

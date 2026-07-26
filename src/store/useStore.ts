@@ -79,6 +79,7 @@ interface AppState {
   openGraphOverview: () => void
   toggleOverviewRelType: (relType: GraphRelType) => void
   setOverviewNodePosition: (nodeId: string, pos: XY) => void
+  moveOverviewGroup: (hubId: string, memberIds: string[], dx: number, dy: number) => void
   relayoutOverview: () => void
 }
 
@@ -407,6 +408,24 @@ export const useStore = create<AppState>((set, get) => ({
 
   setOverviewNodePosition: (nodeId: string, pos: XY) => {
     set((prev) => ({ overviewPositions: { ...prev.overviewPositions, [nodeId]: pos } }))
+  },
+
+  /**
+   * Déplace un hub et tous les types qui lui sont rattachés (mêmes membres
+   * que le couloir calculé par layoutHubGraph) d'un même décalage, en un
+   * seul rendu — le hub sert de "poignée" pour déplacer tout son groupe.
+   */
+  moveOverviewGroup: (hubId: string, memberIds: string[], dx: number, dy: number) => {
+    set((prev) => {
+      const positions = { ...prev.overviewPositions }
+      const hubPos = positions[hubId]
+      if (hubPos) positions[hubId] = { x: hubPos.x + dx, y: hubPos.y + dy }
+      for (const id of memberIds) {
+        const p = positions[id]
+        if (p) positions[id] = { x: p.x + dx, y: p.y + dy }
+      }
+      return { overviewPositions: positions }
+    })
   },
 
   relayoutOverview: () => {
