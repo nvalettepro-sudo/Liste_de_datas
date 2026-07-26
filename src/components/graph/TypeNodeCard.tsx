@@ -19,11 +19,9 @@ function TypeNodeCardImpl({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Top} className="!bg-gray-600 !w-1.5 !h-1.5 !border-0" />
 
-      <p className="text-xs font-mono text-gray-300 truncate">{node.entityType}</p>
-      {fr && <p className="text-[11px] text-gray-500 leading-tight">{fr}</p>}
-      <p className="text-lg font-semibold text-gray-100 tabular-nums mt-0.5">
-        {node.count.toLocaleString('fr-FR')}
-      </p>
+      <p className="text-sm font-semibold text-gray-100 truncate">{fr ?? node.entityType}</p>
+      {fr && <p className="text-[11px] font-mono text-gray-500 leading-tight truncate">{node.entityType}</p>}
+      <p className="text-xs text-gray-500 tabular-nums mt-1">{node.count.toLocaleString('fr-FR')}</p>
       <p className="text-[10px] text-gray-600 mt-1">⊕ double-clic pour explorer</p>
 
       <Handle type="source" position={Position.Bottom} className="!bg-gray-600 !w-1.5 !h-1.5 !border-0" />
