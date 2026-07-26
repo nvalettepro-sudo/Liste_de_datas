@@ -10,10 +10,31 @@ import type {
   GraphNode,
   GraphEdge,
   GraphRelType,
+  TypeGraphNode,
+  TypeGraphEdge,
   WorkerOutMessage,
 } from '../lib/types'
 
 export type { XY }
+
+/**
+ * Reconstruit le graphe à hubs et son layout à partir du graphe brut,
+ * restreint aux relations actuellement actives. Recalculer plutôt que
+ * filtrer visuellement garantit qu'un type affiché appartient toujours à un
+ * hub lui-même affiché — sinon une carte peut se retrouver rattachée (pour
+ * le regroupement) à un hub masqué, et apparaître sans en-tête ni possibilité
+ * de déplacement groupé.
+ */
+function recomputeOverview(
+  rawNodes: TypeGraphNode[],
+  rawEdges: TypeGraphEdge[],
+  relTypes: GraphRelType[]
+): { nodes: HubGraphNode[]; edges: HubGraphEdge[]; positions: Record<string, XY> } {
+  const filteredEdges = rawEdges.filter((e) => relTypes.includes(e.relType))
+  const { nodes, edges } = buildHubGraph(rawNodes, filteredEdges)
+  const positions = layoutHubGraph(nodes, edges, GRAPH_REL_TYPES)
+  return { nodes, edges, positions }
+}
 
 /**
  * La vue d'ensemble a des nœuds à très haut degré (ex. IfcPropertySet relié à
@@ -54,6 +75,10 @@ interface AppState {
   graphOmitted: number
 
   /* --- Vue d'ensemble (v2.1) — graphe à hubs de relation --- */
+  /** Graphe type-à-type brut, avant transformation en hubs — sert à recalculer
+   * le regroupement quand les relations actives changent. */
+  overviewRawNodes: TypeGraphNode[]
+  overviewRawEdges: TypeGraphEdge[]
   overviewNodes: HubGraphNode[]
   overviewEdges: HubGraphEdge[]
   overviewPositions: Record<string, XY>
@@ -88,8 +113,9 @@ let worker: Worker | null = null
 type SetState = (
   s: Partial<AppState> | ((prev: AppState) => Partial<AppState>)
 ) => void
+type GetState = () => AppState
 
-function getOrCreateWorker(set: SetState) {
+function getOrCreateWorker(set: SetState, get: GetState) {
   if (worker) {
     worker.terminate()
     worker = null
@@ -158,15 +184,22 @@ function getOrCreateWorker(set: SetState) {
         }
       })
     } else if (msg.type === 'graphOverviewData') {
-      // Le graphe brut (type à type) est immédiatement transformé en graphe à
-      // hubs : chaque relation devient un nœud nommé plutôt qu'une simple
-      // couleur d'arête. Le filtrage par relation (overviewRelTypes) reste un
-      // filtrage d'affichage pur ensuite, sans recalcul.
-      const { nodes: hubNodes, edges: hubEdges } = buildHubGraph(msg.payload.nodes, msg.payload.edges)
+      // Le graphe brut (type à type) est conservé pour pouvoir recalculer le
+      // regroupement à chaque changement de relations actives (voir
+      // recomputeOverview) — sinon un type peut rester rattaché à un hub
+      // masqué et s'afficher sans en-tête.
+      const relTypes = get().overviewRelTypes
+      const { nodes: hubNodes, edges: hubEdges, positions } = recomputeOverview(
+        msg.payload.nodes,
+        msg.payload.edges,
+        relTypes
+      )
       set({
+        overviewRawNodes: msg.payload.nodes,
+        overviewRawEdges: msg.payload.edges,
         overviewNodes: hubNodes,
         overviewEdges: hubEdges,
-        overviewPositions: layoutHubGraph(hubNodes, hubEdges, GRAPH_REL_TYPES),
+        overviewPositions: positions,
         graphLoading: false,
         isLoading: false,
         loadPhase: '',
@@ -210,6 +243,8 @@ export const useStore = create<AppState>((set, get) => ({
   graphTruncated: false,
   graphOmitted: 0,
 
+  overviewRawNodes: [],
+  overviewRawEdges: [],
   overviewNodes: [],
   overviewEdges: [],
   overviewPositions: {},
@@ -236,11 +271,13 @@ export const useStore = create<AppState>((set, get) => ({
       graphPositions: {},
       graphExpanded: [],
       graphRootId: null,
+      overviewRawNodes: [],
+      overviewRawEdges: [],
       overviewNodes: [],
       overviewEdges: [],
       overviewPositions: {},
     })
-    const w = getOrCreateWorker(set)
+    const w = getOrCreateWorker(set, get)
     file.arrayBuffer().then((buf) => {
       w.postMessage({ type: 'load', buffer: buf }, [buf])
     })
@@ -275,6 +312,8 @@ export const useStore = create<AppState>((set, get) => ({
       graphStoreyFilter: null,
       graphTruncated: false,
       graphOmitted: 0,
+      overviewRawNodes: [],
+      overviewRawEdges: [],
       overviewNodes: [],
       overviewEdges: [],
       overviewPositions: {},
@@ -396,13 +435,22 @@ export const useStore = create<AppState>((set, get) => ({
     worker.postMessage({ type: 'graphOverview' })
   },
 
-  /** Filtrage purement client : la vue d'ensemble contient déjà les 6 relations. */
+  /**
+   * Recalcule le regroupement à chaque changement de relations actives :
+   * un simple filtrage d'affichage laisserait des types rattachés à un hub
+   * masqué, sans en-tête ni possibilité de déplacement groupé.
+   */
   toggleOverviewRelType: (relType: GraphRelType) => {
-    const cur = get().overviewRelTypes
+    const { overviewRelTypes, overviewRawNodes, overviewRawEdges } = get()
+    const next = overviewRelTypes.includes(relType)
+      ? overviewRelTypes.filter((t) => t !== relType)
+      : [...overviewRelTypes, relType]
+    const { nodes, edges, positions } = recomputeOverview(overviewRawNodes, overviewRawEdges, next)
     set({
-      overviewRelTypes: cur.includes(relType)
-        ? cur.filter((t) => t !== relType)
-        : [...cur, relType],
+      overviewRelTypes: next,
+      overviewNodes: nodes,
+      overviewEdges: edges,
+      overviewPositions: positions,
     })
   },
 

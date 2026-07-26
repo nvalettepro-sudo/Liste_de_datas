@@ -65,42 +65,29 @@ export function GraphOverview() {
     return byHub
   }, [overviewNodes, overviewEdges])
 
-  const visibleEdges = useMemo(
-    () => overviewEdges.filter((e) => overviewRelTypes.includes(e.relType)),
-    [overviewEdges, overviewRelTypes]
-  )
-
-  const visibleNodeIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const e of visibleEdges) {
-      ids.add(e.source)
-      ids.add(e.target)
-    }
-    return ids
-  }, [visibleEdges])
-
+  // overviewNodes/overviewEdges sont déjà recalculés dans le store pour ne
+  // contenir que les relations actives (voir recomputeOverview) : un type
+  // affiché ici appartient toujours à un hub lui-même affiché.
   const rfNodes: Node[] = useMemo(
     () =>
-      overviewNodes
-        .filter((n) => visibleNodeIds.has(n.id))
-        .map((n) =>
-          n.kind === 'hub'
-            ? {
-                id: n.id,
-                type: 'hubNode',
-                position: overviewPositions[n.id] ?? { x: 0, y: 0 },
-                data: { relType: n.relType!, count: n.count } satisfies HubNodeCardData,
-              }
-            : {
-                id: n.id,
-                type: 'typeNode',
-                position: overviewPositions[n.id] ?? { x: 0, y: 0 },
-                data: {
-                  node: { id: n.id, entityType: n.entityType!, count: n.count },
-                } satisfies TypeNodeCardData,
-              }
-        ),
-    [overviewNodes, overviewPositions, visibleNodeIds]
+      overviewNodes.map((n) =>
+        n.kind === 'hub'
+          ? {
+              id: n.id,
+              type: 'hubNode',
+              position: overviewPositions[n.id] ?? { x: 0, y: 0 },
+              data: { relType: n.relType!, count: n.count } satisfies HubNodeCardData,
+            }
+          : {
+              id: n.id,
+              type: 'typeNode',
+              position: overviewPositions[n.id] ?? { x: 0, y: 0 },
+              data: {
+                node: { id: n.id, entityType: n.entityType!, count: n.count },
+              } satisfies TypeNodeCardData,
+            }
+      ),
+    [overviewNodes, overviewPositions]
   )
 
   /**
@@ -110,7 +97,7 @@ export function GraphOverview() {
    */
   const rfEdges: Edge[] = useMemo(
     () =>
-      visibleEdges.map((e) => {
+      overviewEdges.map((e) => {
         const meta = REL_META[e.relType]
         const isSelected =
           selectedEdge?.relType === e.relType &&
@@ -129,7 +116,7 @@ export function GraphOverview() {
           data: { relType: e.relType, count: e.count },
         }
       }),
-    [visibleEdges, selectedEdge, labelById]
+    [overviewEdges, selectedEdge, labelById]
   )
 
   const onNodeDoubleClick: NodeMouseHandler = useCallback(
