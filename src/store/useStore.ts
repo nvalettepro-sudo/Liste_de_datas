@@ -24,23 +24,56 @@ export type { XY }
  * hub lui-même affiché — sinon une carte peut se retrouver rattachée (pour
  * le regroupement) à un hub masqué, et apparaître sans en-tête ni possibilité
  * de déplacement groupé.
+ *
+ * Si un état précédent est fourni, les positions (y compris les glissers
+ * manuels) sont conservées pour tout nœud dont le rattachement au hub ne
+ * change pas — seuls les nœuds nouveaux ou dont le hub dominant change
+ * reçoivent une position fraîchement calculée. Sans ça, cocher une seule
+ * case effaçait silencieusement toute disposition manuelle en cours.
  */
 function recomputeOverview(
   rawNodes: TypeGraphNode[],
   rawEdges: TypeGraphEdge[],
-  relTypes: GraphRelType[]
-): { nodes: HubGraphNode[]; edges: HubGraphEdge[]; positions: Record<string, XY> } {
+  relTypes: GraphRelType[],
+  prev?: {
+    nodes: HubGraphNode[]
+    edges: HubGraphEdge[]
+    positions: Record<string, XY>
+    computedPositions: Record<string, XY>
+  }
+): {
+  nodes: HubGraphNode[]
+  edges: HubGraphEdge[]
+  positions: Record<string, XY>
+  computedPositions: Record<string, XY>
+} {
   const filteredEdges = rawEdges.filter((e) => relTypes.includes(e.relType))
   const { nodes, edges } = buildHubGraph(rawNodes, filteredEdges)
-  const positions = layoutHubGraph(nodes, edges, GRAPH_REL_TYPES)
-  return { nodes, edges, positions }
-}
+  const freshPositions = layoutHubGraph(nodes, edges, GRAPH_REL_TYPES)
 
-/**
- * La vue d'ensemble a des nœuds à très haut degré (ex. IfcPropertySet relié à
- * la plupart des types) — un espacement plus large que le mode détail limite
- * les croisements d'arêtes qui la rendent illisible.
- */
+  if (!prev) {
+    return { nodes, edges, positions: freshPositions, computedPositions: freshPositions }
+  }
+
+  const prevHome = computeHomeHubs(prev.nodes, prev.edges)
+  const nextHome = computeHomeHubs(nodes, edges)
+
+  const positions: Record<string, XY> = {}
+  const computedPositions: Record<string, XY> = {}
+  for (const n of nodes) {
+    const homeUnchanged = n.kind === 'hub' || prevHome.get(n.id) === nextHome.get(n.id)
+    const hadPosition = prev.positions[n.id] !== undefined
+    if (hadPosition && homeUnchanged) {
+      positions[n.id] = prev.positions[n.id]
+      computedPositions[n.id] = prev.computedPositions[n.id] ?? freshPositions[n.id]
+    } else {
+      positions[n.id] = freshPositions[n.id]
+      computedPositions[n.id] = freshPositions[n.id]
+    }
+  }
+
+  return { nodes, edges, positions, computedPositions }
+}
 
 interface AppState {
   fileName: string | null
@@ -192,7 +225,7 @@ function getOrCreateWorker(set: SetState, get: GetState) {
       // recomputeOverview) — sinon un type peut rester rattaché à un hub
       // masqué et s'afficher sans en-tête.
       const relTypes = get().overviewRelTypes
-      const { nodes: hubNodes, edges: hubEdges, positions } = recomputeOverview(
+      const { nodes: hubNodes, edges: hubEdges, positions, computedPositions } = recomputeOverview(
         msg.payload.nodes,
         msg.payload.edges,
         relTypes
@@ -203,7 +236,7 @@ function getOrCreateWorker(set: SetState, get: GetState) {
         overviewNodes: hubNodes,
         overviewEdges: hubEdges,
         overviewPositions: positions,
-        overviewComputedPositions: positions,
+        overviewComputedPositions: computedPositions,
         graphLoading: false,
         isLoading: false,
         loadPhase: '',
@@ -445,20 +478,36 @@ export const useStore = create<AppState>((set, get) => ({
   /**
    * Recalcule le regroupement à chaque changement de relations actives :
    * un simple filtrage d'affichage laisserait des types rattachés à un hub
-   * masqué, sans en-tête ni possibilité de déplacement groupé.
+   * masqué, sans en-tête ni possibilité de déplacement groupé. Les positions
+   * (y compris les glissers manuels) sont préservées pour tout nœud dont le
+   * rattachement ne change pas — seuls les nœuds affectés par le changement
+   * de relations sont repositionnés.
    */
   toggleOverviewRelType: (relType: GraphRelType) => {
-    const { overviewRelTypes, overviewRawNodes, overviewRawEdges } = get()
+    const {
+      overviewRelTypes,
+      overviewRawNodes,
+      overviewRawEdges,
+      overviewNodes,
+      overviewEdges,
+      overviewPositions,
+      overviewComputedPositions,
+    } = get()
     const next = overviewRelTypes.includes(relType)
       ? overviewRelTypes.filter((t) => t !== relType)
       : [...overviewRelTypes, relType]
-    const { nodes, edges, positions } = recomputeOverview(overviewRawNodes, overviewRawEdges, next)
+    const { nodes, edges, positions, computedPositions } = recomputeOverview(
+      overviewRawNodes,
+      overviewRawEdges,
+      next,
+      { nodes: overviewNodes, edges: overviewEdges, positions: overviewPositions, computedPositions: overviewComputedPositions }
+    )
     set({
       overviewRelTypes: next,
       overviewNodes: nodes,
       overviewEdges: edges,
       overviewPositions: positions,
-      overviewComputedPositions: positions,
+      overviewComputedPositions: computedPositions,
     })
   },
 
