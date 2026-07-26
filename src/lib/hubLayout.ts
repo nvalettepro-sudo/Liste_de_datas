@@ -86,7 +86,11 @@ export function layoutHubGraph(
     laneMembers.get(hubId)!.push(typeId)
   }
 
-  const laneList = orderedHubs.filter((h) => (laneMembers.get(h.id)?.length ?? 0) > 0)
+  // Tous les hubs actifs reçoivent une position, même sans membre "domicilié"
+  // chez eux : un hub relié à des types qui préfèrent tous un autre hub plus
+  // fort n'en reste pas moins un nœud affiché, avec ses propres arêtes — le
+  // laisser sans position le faisait flotter à l'origine du canevas.
+  const laneList = orderedHubs
   if (laneList.length === 0) return {}
 
   // Cherche le nombre de lignes par couloir qui rapproche le ratio global
