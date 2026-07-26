@@ -82,6 +82,8 @@ interface AppState {
   overviewNodes: HubGraphNode[]
   overviewEdges: HubGraphEdge[]
   overviewPositions: Record<string, XY>
+  /** Positions calculées par le layout, jamais modifiées par le glisser — sert de référence pour "Recaler". */
+  overviewComputedPositions: Record<string, XY>
   overviewRelTypes: GraphRelType[]
 
   loadFile: (file: File) => void
@@ -106,6 +108,7 @@ interface AppState {
   setOverviewNodePosition: (nodeId: string, pos: XY) => void
   moveOverviewGroup: (hubId: string, memberIds: string[], dx: number, dy: number) => void
   relayoutOverview: () => void
+  resetOverviewNodePosition: (nodeId: string) => void
 }
 
 let worker: Worker | null = null
@@ -200,6 +203,7 @@ function getOrCreateWorker(set: SetState, get: GetState) {
         overviewNodes: hubNodes,
         overviewEdges: hubEdges,
         overviewPositions: positions,
+        overviewComputedPositions: positions,
         graphLoading: false,
         isLoading: false,
         loadPhase: '',
@@ -248,6 +252,7 @@ export const useStore = create<AppState>((set, get) => ({
   overviewNodes: [],
   overviewEdges: [],
   overviewPositions: {},
+  overviewComputedPositions: {},
   // IfcRelDefinesByProperties reste décoché par défaut : sur une vraie
   // maquette, la quasi-totalité des types portent des Psets, ce qui en fait
   // un hub connecté à presque tout le graphe — un vrai nid d'oiseau à
@@ -276,6 +281,7 @@ export const useStore = create<AppState>((set, get) => ({
       overviewNodes: [],
       overviewEdges: [],
       overviewPositions: {},
+      overviewComputedPositions: {},
     })
     const w = getOrCreateWorker(set, get)
     file.arrayBuffer().then((buf) => {
@@ -317,6 +323,7 @@ export const useStore = create<AppState>((set, get) => ({
       overviewNodes: [],
       overviewEdges: [],
       overviewPositions: {},
+      overviewComputedPositions: {},
     })
   },
 
@@ -451,11 +458,21 @@ export const useStore = create<AppState>((set, get) => ({
       overviewNodes: nodes,
       overviewEdges: edges,
       overviewPositions: positions,
+      overviewComputedPositions: positions,
     })
   },
 
   setOverviewNodePosition: (nodeId: string, pos: XY) => {
     set((prev) => ({ overviewPositions: { ...prev.overviewPositions, [nodeId]: pos } }))
+  },
+
+  /** Ramène un nœud déplacé à la position calculée par le layout (sous son en-tête). */
+  resetOverviewNodePosition: (nodeId: string) => {
+    set((prev) => {
+      const target = prev.overviewComputedPositions[nodeId]
+      if (!target) return {}
+      return { overviewPositions: { ...prev.overviewPositions, [nodeId]: target } }
+    })
   },
 
   /**
@@ -478,6 +495,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   relayoutOverview: () => {
     const { overviewNodes, overviewEdges } = get()
-    set({ overviewPositions: layoutHubGraph(overviewNodes, overviewEdges, GRAPH_REL_TYPES) })
+    const positions = layoutHubGraph(overviewNodes, overviewEdges, GRAPH_REL_TYPES)
+    set({ overviewPositions: positions, overviewComputedPositions: positions })
   },
 }))
