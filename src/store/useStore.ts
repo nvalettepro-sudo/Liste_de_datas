@@ -32,6 +32,27 @@ export type { XY }
  * reçoivent une position fraîchement calculée. Sans ça, cocher une seule
  * case effaçait silencieusement toute disposition manuelle en cours.
  */
+/**
+ * Déplace un hub et les membres qui lui sont rattachés d'un même décalage,
+ * dans une table de positions — logique partagée entre la vue d'ensemble et
+ * la vue détail, seule la table cible (overviewPositions/graphPositions)
+ * diffère.
+ */
+function movePositionsGroup(
+  positions: Record<string, XY>,
+  hubId: string,
+  memberIds: string[],
+  dx: number,
+  dy: number
+): Record<string, XY> {
+  const next = { ...positions }
+  for (const id of [hubId, ...memberIds]) {
+    const p = next[id]
+    if (p) next[id] = { x: p.x + dx, y: p.y + dy }
+  }
+  return next
+}
+
 function recomputeOverview(
   rawNodes: TypeGraphNode[],
   rawEdges: TypeGraphEdge[],
@@ -458,16 +479,7 @@ export const useStore = create<AppState>((set, get) => ({
    * rattachés, en un seul rendu.
    */
   moveGraphGroup: (hubId: string, memberIds: string[], dx: number, dy: number) => {
-    set((prev) => {
-      const positions = { ...prev.graphPositions }
-      const hubPos = positions[hubId]
-      if (hubPos) positions[hubId] = { x: hubPos.x + dx, y: hubPos.y + dy }
-      for (const id of memberIds) {
-        const p = positions[id]
-        if (p) positions[id] = { x: p.x + dx, y: p.y + dy }
-      }
-      return { graphPositions: positions }
-    })
+    set((prev) => ({ graphPositions: movePositionsGroup(prev.graphPositions, hubId, memberIds, dx, dy) }))
   },
 
   relayoutGraph: () => {
@@ -591,16 +603,7 @@ export const useStore = create<AppState>((set, get) => ({
    * seul rendu — le hub sert de "poignée" pour déplacer tout son groupe.
    */
   moveOverviewGroup: (hubId: string, memberIds: string[], dx: number, dy: number) => {
-    set((prev) => {
-      const positions = { ...prev.overviewPositions }
-      const hubPos = positions[hubId]
-      if (hubPos) positions[hubId] = { x: hubPos.x + dx, y: hubPos.y + dy }
-      for (const id of memberIds) {
-        const p = positions[id]
-        if (p) positions[id] = { x: p.x + dx, y: p.y + dy }
-      }
-      return { overviewPositions: positions }
-    })
+    set((prev) => ({ overviewPositions: movePositionsGroup(prev.overviewPositions, hubId, memberIds, dx, dy) }))
   },
 
   relayoutOverview: () => {

@@ -97,17 +97,22 @@ export function GraphView() {
     return ids
   }, [graphNodes, graphEdges, graphEntityFilter, graphStoreyFilter, graphRootId])
 
+  const hubIds = useMemo(
+    () => new Set(graphDisplayNodes.filter((n) => n.isHub).map((n) => n.id)),
+    [graphDisplayNodes]
+  )
+
   /** Un hub reste affiché tant qu'il relie au moins un nœud visible. */
   const finalVisibleIds = useMemo(() => {
     const ids = new Set(visibleNodeIds)
     for (const e of graphDisplayEdges) {
-      const sourceIsHub = e.source.startsWith('hub:')
-      const targetIsHub = e.target.startsWith('hub:')
+      const sourceIsHub = hubIds.has(e.source)
+      const targetIsHub = hubIds.has(e.target)
       if (sourceIsHub && !targetIsHub && ids.has(e.target)) ids.add(e.source)
       if (targetIsHub && !sourceIsHub && ids.has(e.source)) ids.add(e.target)
     }
     return ids
-  }, [visibleNodeIds, graphDisplayEdges])
+  }, [visibleNodeIds, graphDisplayEdges, hubIds])
 
   const rfNodes: Node[] = useMemo(
     () =>
@@ -159,7 +164,7 @@ export function GraphView() {
 
   const onNodeDoubleClick: NodeMouseHandler = useCallback(
     (_evt, node) => {
-      if (node.id.startsWith('hub:')) return
+      if (node.type === 'hubNode') return
       expandGraphNode(node.id)
     },
     [expandGraphNode]
@@ -167,7 +172,7 @@ export function GraphView() {
 
   const onNodeDrag: OnNodeDrag = useCallback(
     (_evt, node) => {
-      if (!node.id.startsWith('hub:')) return
+      if (node.type !== 'hubNode') return
       const members = groupMembers.get(node.id)
       if (!members || members.length === 0) return
       const prevPos = useStore.getState().graphPositions[node.id]
