@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { DEFAULT_REL_TYPES, GRAPH_REL_TYPES } from '../lib/types'
 import { layoutGraph, type XY } from '../lib/graphLayout'
 import { buildHubGraph, type HubGraphNode, type HubGraphEdge } from '../lib/hubGraph'
-import { layoutHubGraph } from '../lib/hubLayout'
+import { layoutHubGraph, computeHomeHubs } from '../lib/hubLayout'
 import type {
   EntityTypeSummary,
   AggregatedEntityData,
@@ -467,10 +467,30 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   /** Ramène un nœud déplacé à la position calculée par le layout (sous son en-tête). */
+  /**
+   * Recale un type sous son en-tête, où que celui-ci se trouve désormais —
+   * pas à sa position calculée d'origine, qui ne correspond plus à rien si
+   * le hub lui-même a été déplacé depuis. On rejoue donc l'écart relatif
+   * d'origine (position calculée du type moins celle du hub) à partir de la
+   * position actuelle du hub.
+   */
   resetOverviewNodePosition: (nodeId: string) => {
     set((prev) => {
-      const target = prev.overviewComputedPositions[nodeId]
-      if (!target) return {}
+      const computedNode = prev.overviewComputedPositions[nodeId]
+      if (!computedNode) return {}
+
+      const hubId = computeHomeHubs(prev.overviewNodes, prev.overviewEdges).get(nodeId)
+      const computedHub = hubId ? prev.overviewComputedPositions[hubId] : undefined
+      const currentHub = hubId ? prev.overviewPositions[hubId] : undefined
+
+      const target =
+        computedHub && currentHub
+          ? {
+              x: currentHub.x + (computedNode.x - computedHub.x),
+              y: currentHub.y + (computedNode.y - computedHub.y),
+            }
+          : computedNode
+
       return { overviewPositions: { ...prev.overviewPositions, [nodeId]: target } }
     })
   },
