@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { DEFAULT_REL_TYPES, GRAPH_REL_TYPES } from '../lib/types'
-import { layoutGraph, type XY } from '../lib/graphLayout'
+import { type XY } from '../lib/graphLayout'
 import { buildHubGraph, type HubGraphNode, type HubGraphEdge } from '../lib/hubGraph'
+import { buildDetailHubGraph, type DetailNode, type DetailEdge } from '../lib/detailHubGraph'
 import { layoutHubGraph, computeHomeHubs } from '../lib/hubLayout'
 import type {
   EntityTypeSummary,
@@ -99,6 +100,9 @@ interface AppState {
   graphRootId: string | null
   graphNodes: GraphNode[]
   graphEdges: GraphEdge[]
+  /** Graphe transformé en hubs de relation nommés, utilisé pour l'affichage. */
+  graphDisplayNodes: DetailNode[]
+  graphDisplayEdges: DetailEdge[]
   graphPositions: Record<string, XY>
   graphExpanded: string[]
   graphRelTypes: GraphRelType[]
@@ -131,6 +135,7 @@ interface AppState {
   closeGraph: () => void
   expandGraphNode: (nodeId: string) => void
   setGraphNodePosition: (nodeId: string, pos: XY) => void
+  moveGraphGroup: (hubId: string, memberIds: string[], dx: number, dy: number) => void
   relayoutGraph: () => void
   toggleGraphRelType: (relType: GraphRelType) => void
   setGraphEntityFilter: (types: string[] | null) => void
@@ -200,12 +205,20 @@ function getOrCreateWorker(set: SetState, get: GetState) {
         const allNodes = Array.from(byId.values())
         const allEdges = Array.from(edgeById.values())
 
+        // Même transformation à hubs que la vue d'ensemble : chaque relation
+        // devient un nœud nommé au lieu de connecter les instances entre
+        // elles directement — évite l'explosion en dizaines de nœuds
+        // définition individuels (ex. variantes d'IfcWallType) sans en-tête.
+        const { nodes: displayNodes, edges: displayEdges } = buildDetailHubGraph(allNodes, allEdges)
+
         return {
           graphNodes: allNodes,
           graphEdges: allEdges,
-          // Recalcul complet : une expansion locale (anneau) désynchronise
-          // vite l'ensemble dès que plusieurs zones sont étendues séparément.
-          graphPositions: layoutGraph(allNodes, allEdges),
+          graphDisplayNodes: displayNodes,
+          graphDisplayEdges: displayEdges,
+          // Recalcul complet : une expansion locale désynchronise vite
+          // l'ensemble dès que plusieurs zones sont étendues séparément.
+          graphPositions: layoutHubGraph(displayNodes, displayEdges, GRAPH_REL_TYPES),
           graphExpanded: isRoot
             ? [originId]
             : prev.graphExpanded.includes(originId)
@@ -272,6 +285,8 @@ export const useStore = create<AppState>((set, get) => ({
   graphRootId: null,
   graphNodes: [],
   graphEdges: [],
+  graphDisplayNodes: [],
+  graphDisplayEdges: [],
   graphPositions: {},
   graphExpanded: [],
   graphRelTypes: DEFAULT_REL_TYPES,
@@ -306,6 +321,8 @@ export const useStore = create<AppState>((set, get) => ({
       graphOpen: false,
       graphNodes: [],
       graphEdges: [],
+      graphDisplayNodes: [],
+      graphDisplayEdges: [],
       graphPositions: {},
       graphExpanded: [],
       graphRootId: null,
@@ -345,6 +362,8 @@ export const useStore = create<AppState>((set, get) => ({
       graphRootId: null,
       graphNodes: [],
       graphEdges: [],
+      graphDisplayNodes: [],
+      graphDisplayEdges: [],
       graphPositions: {},
       graphExpanded: [],
       graphEntityFilter: null,
@@ -399,6 +418,8 @@ export const useStore = create<AppState>((set, get) => ({
       graphLoading: true,
       graphNodes: [],
       graphEdges: [],
+      graphDisplayNodes: [],
+      graphDisplayEdges: [],
       graphPositions: {},
       graphExpanded: [],
       graphRootId: null,
@@ -431,9 +452,27 @@ export const useStore = create<AppState>((set, get) => ({
     set((prev) => ({ graphPositions: { ...prev.graphPositions, [nodeId]: pos } }))
   },
 
+  /**
+   * Équivalent de moveOverviewGroup pour la vue détail : le hub sert de
+   * poignée pour déplacer avec lui toutes les instances/groupes qui lui sont
+   * rattachés, en un seul rendu.
+   */
+  moveGraphGroup: (hubId: string, memberIds: string[], dx: number, dy: number) => {
+    set((prev) => {
+      const positions = { ...prev.graphPositions }
+      const hubPos = positions[hubId]
+      if (hubPos) positions[hubId] = { x: hubPos.x + dx, y: hubPos.y + dy }
+      for (const id of memberIds) {
+        const p = positions[id]
+        if (p) positions[id] = { x: p.x + dx, y: p.y + dy }
+      }
+      return { graphPositions: positions }
+    })
+  },
+
   relayoutGraph: () => {
-    const { graphNodes, graphEdges } = get()
-    set({ graphPositions: layoutGraph(graphNodes, graphEdges) })
+    const { graphDisplayNodes, graphDisplayEdges } = get()
+    set({ graphPositions: layoutHubGraph(graphDisplayNodes, graphDisplayEdges, GRAPH_REL_TYPES) })
   },
 
   /**
@@ -454,6 +493,8 @@ export const useStore = create<AppState>((set, get) => ({
       graphLoading: true,
       graphNodes: [],
       graphEdges: [],
+      graphDisplayNodes: [],
+      graphDisplayEdges: [],
       graphPositions: {},
       graphExpanded: [],
     })

@@ -1,6 +1,24 @@
 import type { XY } from './graphLayout'
-import type { HubGraphNode, HubGraphEdge } from './hubGraph'
 import type { GraphRelType } from './types'
+
+/**
+ * Forme minimale nécessaire au calcul du regroupement et du layout — permet
+ * de réutiliser cette logique aussi bien pour le graphe à hubs de la vue
+ * d'ensemble (types) que pour celui de la vue détail (instances), sans
+ * dépendre de leurs champs spécifiques.
+ */
+export interface HubLikeNode {
+  id: string
+  kind: string
+  relType?: GraphRelType
+}
+
+export interface HubLikeEdge {
+  source: string
+  target: string
+  relType: GraphRelType
+  count: number
+}
 
 /** Mêmes dimensions de carte que graphLayout.ts, pour un aspect visuel cohérent. */
 const NODE_W = 210
@@ -49,8 +67,8 @@ export const HOME_HUB_PRIORITY: readonly GraphRelType[] = [
  * le layout.
  */
 export function computeHomeHubs(
-  nodes: HubGraphNode[],
-  edges: HubGraphEdge[],
+  nodes: HubLikeNode[],
+  edges: HubLikeEdge[],
   priority: readonly GraphRelType[] = HOME_HUB_PRIORITY
 ): Map<string, string> {
   const hubRelById = new Map<string, GraphRelType>()
@@ -92,15 +110,15 @@ export function computeHomeHubs(
  * autres hubs restent tracées, elles traversent simplement les couloirs.
  */
 export function layoutHubGraph(
-  nodes: HubGraphNode[],
-  edges: HubGraphEdge[],
+  nodes: HubLikeNode[],
+  edges: HubLikeEdge[],
   relOrder: readonly GraphRelType[]
 ): Record<string, XY> {
-  const hubs = nodes.filter((n): n is HubGraphNode & { relType: GraphRelType } => n.kind === 'hub' && !!n.relType)
+  const hubs = nodes.filter((n): n is HubLikeNode & { relType: GraphRelType } => n.kind === 'hub' && !!n.relType)
 
   const orderedHubs = relOrder
     .map((rel) => hubs.find((h) => h.relType === rel))
-    .filter((h): h is HubGraphNode & { relType: GraphRelType } => !!h)
+    .filter((h): h is HubLikeNode & { relType: GraphRelType } => !!h)
 
   const home = computeHomeHubs(nodes, edges)
 
