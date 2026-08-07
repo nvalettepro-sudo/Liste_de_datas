@@ -14,6 +14,7 @@ import type {
   TypeGraphNode,
   TypeGraphEdge,
   WorkerOutMessage,
+  ProjectInfo,
 } from '../lib/types'
 
 export type { XY }
@@ -105,6 +106,7 @@ interface AppState {
   loadPhase: string
   error: string | null
   entityTypes: EntityTypeSummary[]
+  projectInfo: ProjectInfo | null
   selectedType: string | null
   aggregatedData: AggregatedEntityData | null
   searchQuery: string
@@ -200,6 +202,8 @@ function getOrCreateWorker(set: SetState, get: GetState) {
         selectedType: null,
         aggregatedData: null,
       })
+    } else if (msg.type === 'projectInfo') {
+      set({ projectInfo: msg.data })
     } else if (msg.type === 'aggregated') {
       set({
         aggregatedData: msg.data,
@@ -293,6 +297,7 @@ export const useStore = create<AppState>((set, get) => ({
   loadPhase: '',
   error: null,
   entityTypes: [],
+  projectInfo: null,
   selectedType: null,
   aggregatedData: null,
   searchQuery: '',
@@ -336,6 +341,7 @@ export const useStore = create<AppState>((set, get) => ({
       loadPhase: 'Lecture du fichier…',
       error: null,
       entityTypes: [],
+      projectInfo: null,
       aggregatedData: null,
       selectedType: null,
       globalSearchResults: null,
@@ -373,6 +379,7 @@ export const useStore = create<AppState>((set, get) => ({
       loadPhase: '',
       error: null,
       entityTypes: [],
+      projectInfo: null,
       selectedType: null,
       aggregatedData: null,
       searchQuery: '',

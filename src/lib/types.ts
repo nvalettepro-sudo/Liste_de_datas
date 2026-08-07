@@ -164,6 +164,69 @@ export interface TypeGraphPayload {
   edges: TypeGraphEdge[]
 }
 
+/* ---------- Informations projet / site ---------- */
+
+export interface UnitInfo {
+  /** Valeur de IfcUnitEnum (LENGTHUNIT, AREAUNIT…) ou 'MONETARYUNIT'. */
+  unitType: string
+  label: string
+}
+
+export interface StoreyInfo {
+  name: string | null
+  elevation: number | null
+}
+
+export interface MapConversionInfo {
+  eastings: number | null
+  northings: number | null
+  orthogonalHeight: number | null
+  /** Dérivée de XAxisAbscissa/XAxisOrdinate, en degrés. */
+  rotation: number | null
+  scale: number | null
+  crsName: string | null
+  crsDescription: string | null
+  geodeticDatum: string | null
+  verticalDatum: string | null
+  mapProjection: string | null
+  mapZone: string | null
+}
+
+export interface GeoReference {
+  /** IfcSite.RefLatitude/RefLongitude convertis en degrés décimaux (2x3 et 4+). */
+  latitude: number | null
+  longitude: number | null
+  elevation: number | null
+  /** IFC4+ uniquement : conversion vers un système de coordonnées projeté (IfcMapConversion). */
+  mapConversion: MapConversionInfo | null
+}
+
+export interface OwnerHistoryInfo {
+  creationDate: string | null
+  lastModifiedDate: string | null
+  personName: string | null
+  organizationName: string | null
+  applicationName: string | null
+  applicationVersion: string | null
+  applicationDeveloper: string | null
+}
+
+export interface ProjectInfo {
+  schema: string
+  /** Model View Definition, extrait de l'en-tête STEP (FILE_DESCRIPTION). */
+  mvd: string | null
+  projectName: string | null
+  projectLongName: string | null
+  projectPhase: string | null
+  siteName: string | null
+  siteAddress: string | null
+  buildingName: string | null
+  storeys: StoreyInfo[]
+  georeference: GeoReference | null
+  ownerHistory: OwnerHistoryInfo | null
+  units: UnitInfo[]
+}
+
 export type WorkerInMessage =
   | { type: 'init'; wasmPath: string }
   | { type: 'load'; buffer: ArrayBuffer }
@@ -176,6 +239,7 @@ export type WorkerInMessage =
 export type WorkerOutMessage =
   | { type: 'progress'; percent: number; phase: string }
   | { type: 'ready'; entityTypes: EntityTypeSummary[]; ifcVersion: string }
+  | { type: 'projectInfo'; data: ProjectInfo }
   | { type: 'aggregated'; data: AggregatedEntityData }
   | { type: 'searchResults'; query: string; results: GlobalSearchResult[] }
   | { type: 'graphData'; payload: GraphPayload }
