@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store/useStore'
 import { IFC_FR, ALLOWED_IFC_TYPES } from '../lib/ifcTranslations'
+import { ProjectInfoPanel } from './ProjectInfoPanel'
 import type { EntityTypeSummary } from '../lib/types'
 
 type SortMode = 'count' | 'alpha'
+type SidebarTab = 'entities' | 'info'
 
 function EntityRow({
   summary,
@@ -72,6 +74,7 @@ export function LeftPanel() {
 
   const [sortMode, setSortMode] = useState<SortMode>('count')
   const [search, setSearch] = useState('')
+  const [tab, setTab] = useState<SidebarTab>('entities')
 
   const entityTypes = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -155,24 +158,51 @@ export function LeftPanel() {
             </svg>
           )}
         </div>
+
+        <div className="flex mt-2 -mb-2 -mx-3 px-1 border-b border-gray-800">
+          <button
+            onClick={() => setTab('entities')}
+            className={`flex-1 px-2 py-1.5 text-xs border-b-2 transition-colors ${
+              tab === 'entities'
+                ? 'text-blue-400 border-blue-500'
+                : 'text-gray-500 border-transparent hover:text-gray-300'
+            }`}
+          >
+            Entités
+          </button>
+          <button
+            onClick={() => setTab('info')}
+            className={`flex-1 px-2 py-1.5 text-xs border-b-2 transition-colors ${
+              tab === 'info'
+                ? 'text-blue-400 border-blue-500'
+                : 'text-gray-500 border-transparent hover:text-gray-300'
+            }`}
+          >
+            Infos projet
+          </button>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {entityTypes.length === 0 && search && (
-          <p className="px-3 py-4 text-xs text-gray-700 italic">
-            Aucun résultat pour « {search} »
-          </p>
-        )}
-        {entityTypes.map((s) => (
-          <EntityRow
-            key={s.type}
-            summary={s}
-            selected={s.type === selectedType}
-            maxCount={maxCount}
-            onClick={() => selectType(s.type)}
-          />
-        ))}
-      </div>
+      {tab === 'info' ? (
+        <ProjectInfoPanel />
+      ) : (
+        <div className="flex-1 overflow-y-auto">
+          {entityTypes.length === 0 && search && (
+            <p className="px-3 py-4 text-xs text-gray-700 italic">
+              Aucun résultat pour « {search} »
+            </p>
+          )}
+          {entityTypes.map((s) => (
+            <EntityRow
+              key={s.type}
+              summary={s}
+              selected={s.type === selectedType}
+              maxCount={maxCount}
+              onClick={() => selectType(s.type)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

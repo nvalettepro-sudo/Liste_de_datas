@@ -19,6 +19,11 @@ import type {
   TypeGraphEdge,
   WorkerInMessage,
   WorkerOutMessage,
+  ProjectInfo,
+  StoreyInfo,
+  GeoReference,
+  OwnerHistoryInfo,
+  UnitInfo,
 } from '../lib/types'
 
 let api: WebIFC.IfcAPI | null = null
@@ -165,6 +170,261 @@ function buildPsetMap() {
   }
 }
 
+const SI_PREFIX_SYMBOL: Record<string, string> = {
+  EXA: 'E', PETA: 'P', TERA: 'T', GIGA: 'G', MEGA: 'M', KILO: 'k', HECTO: 'h', DECA: 'da',
+  DECI: 'd', CENTI: 'c', MILLI: 'm', MICRO: 'µ', NANO: 'n', PICO: 'p', FEMTO: 'f', ATTO: 'a',
+}
+const SI_UNIT_SYMBOL: Record<string, string> = {
+  METRE: 'm', SQUARE_METRE: 'm²', CUBIC_METRE: 'm³', GRAM: 'g', SECOND: 's', RADIAN: 'rad',
+  STERADIAN: 'sr', DEGREE_CELSIUS: '°C', NEWTON: 'N', PASCAL: 'Pa', JOULE: 'J', WATT: 'W',
+  AMPERE: 'A', VOLT: 'V', KELVIN: 'K', HERTZ: 'Hz', LUX: 'lx', LUMEN: 'lm', CANDELA: 'cd',
+  MOLE: 'mol', COULOMB: 'C', FARAD: 'F', OHM: 'Ω', SIEMENS: 'S', WEBER: 'Wb', TESLA: 'T', HENRY: 'H',
+  BECQUEREL: 'Bq', GRAY: 'Gy', SIEVERT: 'Sv',
+}
+const UNIT_TYPE_LABEL: Record<string, string> = {
+  LENGTHUNIT: 'Longueur', AREAUNIT: 'Surface', VOLUMEUNIT: 'Volume', PLANEANGLEUNIT: 'Angle',
+  SOLIDANGLEUNIT: 'Angle solide', MASSUNIT: 'Masse', TIMEUNIT: 'Temps',
+  THERMODYNAMICTEMPERATUREUNIT: 'Température', FREQUENCYUNIT: 'Fréquence', FORCEUNIT: 'Force',
+  PRESSUREUNIT: 'Pression', ENERGYUNIT: 'Énergie', POWERUNIT: 'Puissance',
+  ELECTRICCURRENTUNIT: 'Courant électrique', ELECTRICVOLTAGEUNIT: 'Tension électrique',
+  LUMINOUSFLUXUNIT: 'Flux lumineux', ILLUMINANCEUNIT: 'Éclairement', MONETARYUNIT: 'Monnaie',
+}
+
+/** Résout une référence STEP ({value: expressId}) vers la ligne pointée. */
+function resolveRef(ref: unknown): Record<string, unknown> | null {
+  if (!api) return null
+  const r = ref as Record<string, unknown> | undefined
+  if (!r || r.value === undefined) return null
+  try {
+    return api.GetLine(modelId, r.value as number, false) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function numOf(raw: unknown): number | null {
+  const v = valueToString(raw)
+  return typeof v === 'number' ? v : null
+}
+
+/**
+ * IfcCompoundPlaneAngleMeasure : [degrés, minutes, secondes, millionièmes de
+ * seconde]. web-ifc renvoie la liste dans un wrapper `{ value: [...] }`
+ * plutôt qu'un tableau nu (contrairement aux mesures simples déjà gérées par
+ * valueToString), d'où le déballage explicite ici.
+ */
+function compoundAngleToDecimal(raw: unknown): number | null {
+  const wrapped = raw as Record<string, unknown> | undefined
+  const list = Array.isArray(raw) ? raw : Array.isArray(wrapped?.value) ? wrapped!.value : null
+  if (!Array.isArray(list) || list.length === 0) return null
+  const parts = list.map((v) => numOf(v) ?? 0)
+  const [deg, min = 0, sec = 0, micro = 0] = parts
+  const sign = deg < 0 ? -1 : 1
+  return sign * (Math.abs(deg) + min / 60 + sec / 3600 + micro / 3_600_000_000)
+}
+
+/**
+ * Le MVD (Model View Definition) n'est pas porté par une entité mais par
+ * l'en-tête STEP (FILE_DESCRIPTION), ex. "ViewDefinition [ReferenceView_V1.2]".
+ * Extraction directe du texte plutôt que via l'API : plus simple et tout
+ * aussi fiable, l'en-tête étant toujours en tête de fichier en clair.
+ */
+function extractMvd(buffer: ArrayBuffer): string | null {
+  try {
+    const head = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4096))
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(head)
+    const m = text.match(/ViewDefinition\s*\[([^\]]+)\]/i)
+    return m ? m[1].trim() : null
+  } catch {
+    return null
+  }
+}
+
+function buildStoreys(): StoreyInfo[] {
+  if (!api) return []
+  const ids = api.GetLineIDsWithType(modelId, WebIFC.IFCBUILDINGSTOREY)
+  const storeys: StoreyInfo[] = []
+  for (let i = 0; i < ids.size(); i++) {
+    const line = api.GetLine(modelId, ids.get(i), false) as Record<string, unknown>
+    if (!line) continue
+    storeys.push({ name: safeStr(line.Name), elevation: numOf(line.Elevation) })
+  }
+  storeys.sort((a, b) => (a.elevation ?? 0) - (b.elevation ?? 0))
+  return storeys
+}
+
+/**
+ * Géoréférencement : IfcSite porte les coordonnées WGS84 dans toutes les
+ * versions ; IfcMapConversion/IfcProjectedCRS (conversion vers un système
+ * projeté) n'existe qu'à partir d'IFC4.
+ */
+function buildGeoreference(schema: string): GeoReference | null {
+  if (!api) return null
+
+  let latitude: number | null = null
+  let longitude: number | null = null
+  let elevation: number | null = null
+  const siteIds = api.GetLineIDsWithType(modelId, WebIFC.IFCSITE)
+  if (siteIds.size() > 0) {
+    const site = api.GetLine(modelId, siteIds.get(0), false) as Record<string, unknown>
+    latitude = compoundAngleToDecimal(site.RefLatitude)
+    longitude = compoundAngleToDecimal(site.RefLongitude)
+    elevation = numOf(site.RefElevation)
+  }
+
+  let mapConversion: GeoReference['mapConversion'] = null
+  if (schema !== 'IFC2X3') {
+    const mcIds = api.GetLineIDsWithType(modelId, WebIFC.IFCMAPCONVERSION)
+    if (mcIds.size() > 0) {
+      const mc = api.GetLine(modelId, mcIds.get(0), false) as Record<string, unknown>
+      const xAbs = numOf(mc.XAxisAbscissa)
+      const xOrd = numOf(mc.XAxisOrdinate)
+      const crs = resolveRef(mc.TargetCRS)
+      mapConversion = {
+        eastings: numOf(mc.Eastings),
+        northings: numOf(mc.Northings),
+        orthogonalHeight: numOf(mc.OrthogonalHeight),
+        rotation: xAbs !== null && xOrd !== null ? (Math.atan2(xOrd, xAbs) * 180) / Math.PI : null,
+        scale: numOf(mc.Scale),
+        crsName: crs ? safeStr(crs.Name) : null,
+        crsDescription: crs ? safeStr(crs.Description) : null,
+        geodeticDatum: crs ? safeStr(crs.GeodeticDatum) : null,
+        verticalDatum: crs ? safeStr(crs.VerticalDatum) : null,
+        mapProjection: crs ? safeStr(crs.MapProjection) : null,
+        mapZone: crs ? safeStr(crs.MapZone) : null,
+      }
+    }
+  }
+
+  if (latitude === null && longitude === null && !mapConversion) return null
+  return { latitude, longitude, elevation, mapConversion }
+}
+
+function buildOwnerHistory(): OwnerHistoryInfo | null {
+  if (!api) return null
+  const ids = api.GetLineIDsWithType(modelId, WebIFC.IFCOWNERHISTORY)
+  if (ids.size() === 0) return null
+  const oh = api.GetLine(modelId, ids.get(0), false) as Record<string, unknown>
+
+  const fmtDate = (raw: unknown): string | null => {
+    const ts = numOf(raw)
+    if (ts === null) return null
+    try {
+      return new Date(ts * 1000).toLocaleString('fr-FR')
+    } catch {
+      return null
+    }
+  }
+
+  const owningUser = resolveRef(oh.OwningUser)
+  const person = owningUser ? resolveRef(owningUser.ThePerson) : null
+  const org = owningUser ? resolveRef(owningUser.TheOrganization) : null
+  const personName = person
+    ? [safeStr(person.GivenName), safeStr(person.FamilyName)].filter(Boolean).join(' ') || null
+    : null
+
+  const app = resolveRef(oh.OwningApplication)
+  const developer = app ? resolveRef(app.ApplicationDeveloper) : null
+
+  return {
+    creationDate: fmtDate(oh.CreationDate),
+    lastModifiedDate: fmtDate(oh.LastModifiedDate),
+    personName,
+    organizationName: org ? safeStr(org.Name) : null,
+    applicationName: app ? safeStr(app.ApplicationFullName) : null,
+    applicationVersion: app ? safeStr(app.Version) : null,
+    applicationDeveloper: developer ? safeStr(developer.Name) : null,
+  }
+}
+
+/**
+ * N'indexe que les unités SI/dérivées/monétaires réellement déclarées dans le
+ * fichier — en pratique toujours celles de l'unique IfcUnitAssignment du
+ * projet, ce qui évite d'avoir à remonter la référence depuis IfcProject.
+ */
+function buildUnits(): UnitInfo[] {
+  if (!api) return []
+  const units: UnitInfo[] = []
+
+  const siIds = api.GetLineIDsWithType(modelId, WebIFC.IFCSIUNIT)
+  for (let i = 0; i < siIds.size(); i++) {
+    const line = api.GetLine(modelId, siIds.get(i), false) as Record<string, unknown>
+    if (!line) continue
+    const unitType = safeStr(line.UnitType) ?? 'USERDEFINED'
+    const name = safeStr(line.Name) ?? ''
+    const prefix = safeStr(line.Prefix)
+    const symbol = (prefix ? SI_PREFIX_SYMBOL[prefix] ?? prefix : '') + (SI_UNIT_SYMBOL[name] ?? name.toLowerCase())
+    units.push({ unitType, label: `${UNIT_TYPE_LABEL[unitType] ?? unitType} : ${symbol}` })
+  }
+
+  const cbIds = api.GetLineIDsWithType(modelId, WebIFC.IFCCONVERSIONBASEDUNIT)
+  for (let i = 0; i < cbIds.size(); i++) {
+    const line = api.GetLine(modelId, cbIds.get(i), false) as Record<string, unknown>
+    if (!line) continue
+    const unitType = safeStr(line.UnitType) ?? 'USERDEFINED'
+    const name = safeStr(line.Name) ?? ''
+    units.push({ unitType, label: `${UNIT_TYPE_LABEL[unitType] ?? unitType} : ${name}` })
+  }
+
+  const monIds = api.GetLineIDsWithType(modelId, WebIFC.IFCMONETARYUNIT)
+  for (let i = 0; i < monIds.size(); i++) {
+    const line = api.GetLine(modelId, monIds.get(i), false) as Record<string, unknown>
+    if (!line) continue
+    const currency = safeStr(line.Currency) ?? 'Devise'
+    units.push({ unitType: 'MONETARYUNIT', label: `${UNIT_TYPE_LABEL.MONETARYUNIT} : ${currency}` })
+  }
+
+  return units
+}
+
+function buildProjectInfo(buffer: ArrayBuffer, schema: string): ProjectInfo {
+  const info: ProjectInfo = {
+    schema,
+    mvd: extractMvd(buffer),
+    projectName: null,
+    projectLongName: null,
+    projectPhase: null,
+    siteName: null,
+    siteAddress: null,
+    buildingName: null,
+    storeys: buildStoreys(),
+    georeference: buildGeoreference(schema),
+    ownerHistory: buildOwnerHistory(),
+    units: buildUnits(),
+  }
+
+  if (!api) return info
+
+  const projIds = api.GetLineIDsWithType(modelId, WebIFC.IFCPROJECT)
+  if (projIds.size() > 0) {
+    const p = api.GetLine(modelId, projIds.get(0), false) as Record<string, unknown>
+    info.projectName = safeStr(p.Name)
+    info.projectLongName = safeStr(p.LongName)
+    info.projectPhase = safeStr(p.Phase)
+  }
+
+  const siteIds = api.GetLineIDsWithType(modelId, WebIFC.IFCSITE)
+  if (siteIds.size() > 0) {
+    const s = api.GetLine(modelId, siteIds.get(0), false) as Record<string, unknown>
+    info.siteName = safeStr(s.Name)
+    const addr = resolveRef(s.SiteAddress)
+    if (addr) {
+      info.siteAddress =
+        [safeStr(addr.Town), safeStr(addr.Region), safeStr(addr.PostalCode), safeStr(addr.Country)]
+          .filter(Boolean)
+          .join(', ') || null
+    }
+  }
+
+  const buildIds = api.GetLineIDsWithType(modelId, WebIFC.IFCBUILDING)
+  if (buildIds.size() > 0) {
+    const b = api.GetLine(modelId, buildIds.get(0), false) as Record<string, unknown>
+    info.buildingName = safeStr(b.Name)
+  }
+
+  return info
+}
+
 async function loadFile(buffer: ArrayBuffer) {
   post({ type: 'progress', percent: 5, phase: 'Initialisation du moteur IFC…' })
   await initApi()
@@ -229,6 +489,14 @@ async function loadFile(buffer: ArrayBuffer) {
   }
 
   typeSummaries.sort((a, b) => b.count - a.count)
+
+  post({ type: 'progress', percent: 90, phase: 'Informations projet…' })
+  try {
+    post({ type: 'projectInfo', data: buildProjectInfo(buffer, ifcVersion) })
+  } catch {
+    // Un fichier atypique (IfcProject/IfcSite absents ou malformés) ne doit
+    // pas empêcher le chargement du reste de la maquette.
+  }
 
   post({ type: 'progress', percent: 95, phase: 'Finalisation…' })
   post({ type: 'ready', entityTypes: typeSummaries, ifcVersion })
