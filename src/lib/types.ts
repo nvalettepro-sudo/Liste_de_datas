@@ -252,6 +252,8 @@ export interface ProjectInfo {
   schema: string
   /** Model View Definition, extrait de l'en-tête STEP (FILE_DESCRIPTION). */
   mvd: string | null
+  /** Origine des coordonnées déclarée par Revit dans FILE_DESCRIPTION (« Point de base du projet », « Coordonnées partagées »…). */
+  coordinateBase: string | null
   projectName: string | null
   projectLongName: string | null
   projectPhase: string | null
@@ -338,6 +340,8 @@ export interface InspectResult {
   subtitle?: string
   groups: InspectGroup[]
   focusKey?: string
+  /** Clés supplémentaires à mettre en évidence (valeur calculée à partir de plusieurs arguments). */
+  focusKeys?: string[]
   occurrences?: { total: number; items: InspectOccurrence[] }
 }
 

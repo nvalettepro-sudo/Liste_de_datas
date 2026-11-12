@@ -94,7 +94,7 @@ function Line({
         {line.id > 0 ? <span className="text-gray-300">#{line.id}=</span> : null}
         <span className="text-gray-300">{line.typeName}</span>(
         {line.args.map((a, i) => {
-          const isFocus = !!a.key && (a.key === result.focusKey || a.key === 'focus')
+          const isFocus = !!a.key && (a.key === result.focusKey || a.key === 'focus' || !!result.focusKeys?.includes(a.key))
           return (
             <span key={i}>
               <Arg arg={a} isFocus={isFocus} mark={style.mark} focus={style.focus} onRef={onRef} focusRef={isFocus ? focusRef : undefined} />

@@ -272,6 +272,31 @@ function extractMvd(buffer: ArrayBuffer): string | null {
   }
 }
 
+/**
+ * Décode les échappements STEP d'une chaîne d'en-tête (ISO 10303-21) :
+ * \X\HH (ISO-8859-1), \X2\HHHH…\X0\ (UTF-16), \S\c (caractère + 128).
+ */
+function decodeStepString(s: string): string {
+  return s
+    .replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/gi, (_, hex: string) =>
+      String.fromCharCode(...(hex.match(/.{4}/g) ?? []).map((h) => parseInt(h, 16)))
+    )
+    .replace(/\\X\\([0-9A-F]{2})/gi, (_, h: string) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\\S\\(.)/g, (_, c: string) => String.fromCharCode(c.charCodeAt(0) + 128))
+}
+
+/** « CoordinateReference [CoordinateBase: …] » — écrit par Revit dans FILE_DESCRIPTION. */
+function extractCoordinateBase(buffer: ArrayBuffer): string | null {
+  try {
+    const head = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4096))
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(head)
+    const m = text.match(/CoordinateBase\s*:\s*([^,\]']+)/i)
+    return m ? decodeStepString(m[1].trim()) : null
+  } catch {
+    return null
+  }
+}
+
 function buildStoreys(): StoreyInfo[] {
   if (!api) return []
   const ids = api.GetLineIDsWithType(modelId, WebIFC.IFCBUILDINGSTOREY)
@@ -551,6 +576,7 @@ function buildProjectInfo(buffer: ArrayBuffer, schema: string): ProjectInfo {
     },
     schema,
     mvd: extractMvd(buffer),
+    coordinateBase: extractCoordinateBase(buffer),
     projectName: null,
     projectLongName: null,
     projectPhase: null,
@@ -1685,6 +1711,7 @@ const PROJECT_FIELD_LABEL: Record<string, string> = {
   'site.Address': 'Adresse du site',
   schema: 'Schéma IFC',
   mvd: 'MVD (Model View Definition)',
+  coordinateBase: 'Origine des coordonnées (Revit)',
   'owner.application': 'Application',
   'owner.version': 'Version de l’application',
   'owner.developer': 'Éditeur',
@@ -1700,13 +1727,13 @@ function projectFieldResult(field: string, id: number | undefined): Omit<Inspect
   const title = PROJECT_FIELD_LABEL[field] ?? field
   const family: InspectFamily = 'project'
 
-  if (field === 'schema' || field === 'mvd') {
+  if (field === 'schema' || field === 'mvd' || field === 'coordinateBase') {
     return {
       family, title,
       subtitle: 'En-tête STEP du fichier (section HEADER)',
       focusKey: 'focus',
       groups: compact([groupOf('En-tête du fichier', [
-        headerLine('FILE_DESCRIPTION', field === 'mvd' ? { 0: 'focus' } : {}, 'Description : MVD, niveau d’implémentation'),
+        headerLine('FILE_DESCRIPTION', field === 'mvd' || field === 'coordinateBase' ? { 0: 'focus' } : {}, 'Description : MVD, informations de l’export, niveau d’implémentation'),
         headerLine('FILE_NAME', {}, 'Nom, horodatage, auteur, organisation, préprocesseur, logiciel d’origine'),
         headerLine('FILE_SCHEMA', field === 'schema' ? { 0: 'focus' } : {}, 'Schéma IFC déclaré'),
       ])]),
@@ -1967,7 +1994,8 @@ const GEO_KEY_LABEL: Record<string, string> = {
   'geo.latitude': 'Latitude', 'geo.longitude': 'Longitude', 'geo.elevation': 'Altitude (RefElevation)',
   'crs.name': 'Système', 'crs.description': 'Description', 'crs.geodeticDatum': 'Datum géodésique',
   'crs.verticalDatum': 'Datum vertical', 'crs.mapProjection': 'Projection', 'crs.mapZone': 'Zone', 'crs.mapUnit': 'Unité',
-  'site.position': 'Position du site (X, Y, Z)', 'site.orientation': 'Orientation du site',
+  'site.position': 'Position du site dans le repère du modèle', 'site.orientation': 'Orientation du site',
+  'site.result': 'Coordonnées du site dans le système projeté',
   'mc.eastings': 'Eastings (X)', 'mc.northings': 'Northings (Y)', 'mc.orthogonalHeight': 'Hauteur orthogonale (Z)',
   'mc.rotation': 'Rotation', 'mc.scale': 'Échelle', trueNorth: 'Nord vrai',
 }
@@ -1980,8 +2008,13 @@ function inspect(request: InspectRequest): InspectResult {
         request,
         family: request.key.startsWith('geo.') ? 'geolocation' : 'georeference',
         title: GEO_KEY_LABEL[request.key] ?? request.key,
-        subtitle: 'Géolocalisation (IfcSite) et géoréférencement (CRS, conversion, placement, Nord vrai)',
+        subtitle: request.key === 'site.result'
+          ? 'Résultat = position du site dans le repère du modèle (IfcLocalPlacement) passée dans la conversion (IfcMapConversion)'
+          : 'Géolocalisation (IfcSite) et géoréférencement (CRS, conversion, placement, Nord vrai)',
         focusKey: request.key,
+        focusKeys: request.key === 'site.result'
+          ? ['site.position', 'mc.eastings', 'mc.northings', 'mc.orthogonalHeight', 'mc.rotation', 'mc.scale']
+          : undefined,
         groups: geoGroups(),
       }
     case 'project':

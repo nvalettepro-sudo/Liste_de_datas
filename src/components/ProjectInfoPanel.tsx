@@ -115,7 +115,41 @@ export function ProjectInfoPanel() {
               <Empty>Aucun système de coordonnées (IfcProjectedCRS)</Empty>
             )}
 
-            <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Position du site (X, Y, Z)</p>
+            {/* Résultat : ce que l'utilisateur cherche (et ce que Solibri affiche en coordonnées globales). */}
+            {(() => {
+              const mc = georeference.mapConversion
+              const result = mc ? georeference.projectedPosition : georeference.sitePosition
+              const target = georeference.crs?.name ?? (mc ? 'le système projeté' : null)
+              return (
+                <div className="mt-2 mb-1 border border-amber-800/60 bg-amber-950/20 px-2 py-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-amber-400/90 mb-0.5">
+                    {target ? `Coordonnées du site dans ${target}` : 'Coordonnées du site'}
+                  </p>
+                  {result ? (
+                    <>
+                      <Row label="X" value={fmt(result.x, 2)} req={{ kind: 'geo', key: 'site.result' }} />
+                      <Row label="Y" value={fmt(result.y, 2)} req={{ kind: 'geo', key: 'site.result' }} />
+                      <Row label="Z" value={fmt(result.z, 2)} req={{ kind: 'geo', key: 'site.result' }} />
+                      {!mc && (
+                        <p className="text-[10px] text-gray-500 leading-snug pt-0.5">
+                          Sans IfcMapConversion, ce sont les coordonnées du repère du modèle.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <Empty>Placement de l'IfcSite absent</Empty>
+                  )}
+                </div>
+              )
+            })()}
+
+            <p className="pt-2 text-[10px] uppercase tracking-wider text-gray-400">Détail du calcul</p>
+            <p className="text-[10px] text-gray-500 leading-snug pb-0.5">
+              ① position dans le repère du modèle, passée dans ② la conversion = coordonnées ci-dessus.
+            </p>
+            <Row label="Origine (Revit)" value={projectInfo.coordinateBase} req={{ kind: 'project', field: 'coordinateBase' }} />
+
+            <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">① Position dans le repère du modèle</p>
             {georeference.sitePosition ? (
               <>
                 <Row label="X" value={fmt(georeference.sitePosition.x, 2)} req={{ kind: 'geo', key: 'site.position' }} />
@@ -126,7 +160,7 @@ export function ProjectInfoPanel() {
               <Empty>Placement de l'IfcSite absent</Empty>
             )}
 
-            <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Conversion (IfcMapConversion)</p>
+            <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">② Conversion (IfcMapConversion)</p>
             {georeference.mapConversion ? (
               <>
                 <Row label="Eastings (X)" value={fmt(georeference.mapConversion.eastings)} req={{ kind: 'geo', key: 'mc.eastings' }} />
@@ -134,17 +168,6 @@ export function ProjectInfoPanel() {
                 <Row label="Hauteur orth. (Z)" value={fmt(georeference.mapConversion.orthogonalHeight)} req={{ kind: 'geo', key: 'mc.orthogonalHeight' }} />
                 <Row label="Rotation" value={`${fmt(georeference.mapConversion.rotation)}°`} req={{ kind: 'geo', key: 'mc.rotation' }} />
                 <Row label="Échelle" value={fmt(georeference.mapConversion.scale, 0)} req={{ kind: 'geo', key: 'mc.scale' }} />
-                {georeference.projectedPosition && georeference.sitePosition &&
-                  (Math.abs(georeference.projectedPosition.x - georeference.sitePosition.x) > 0.005 ||
-                    Math.abs(georeference.projectedPosition.y - georeference.sitePosition.y) > 0.005 ||
-                    Math.abs(georeference.projectedPosition.z - georeference.sitePosition.z) > 0.005) && (
-                  <>
-                    <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Site dans le CRS</p>
-                    <Row label="X" value={fmt(georeference.projectedPosition.x, 2)} />
-                    <Row label="Y" value={fmt(georeference.projectedPosition.y, 2)} />
-                    <Row label="Z" value={fmt(georeference.projectedPosition.z, 2)} />
-                  </>
-                )}
               </>
             ) : (
               <Empty>
@@ -154,6 +177,7 @@ export function ProjectInfoPanel() {
               </Empty>
             )}
 
+            <p className="pt-2 text-[10px] uppercase tracking-wider text-gray-400">Orientation</p>
             <Row
               label="Nord vrai"
               value={georeference.trueNorth !== null ? `${fmt(georeference.trueNorth)}°` : null}
