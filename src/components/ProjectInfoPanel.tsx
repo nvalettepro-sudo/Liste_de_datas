@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useStore } from '../store/useStore'
 import { IfcLink } from './IfcLink'
-import { GeorefPanel } from './GeorefPanel'
+import { GeorefPanel, GeolocationPanel } from './GeorefPanel'
 import type { InspectRequest } from '../lib/types'
 
 /**
@@ -88,6 +88,8 @@ export function ProjectInfoPanel() {
       </Section>
 
       <GeorefPanel g={projectInfo.geo} />
+
+      <GeolocationPanel g={projectInfo.geo} />
 
       <Section title={`Étages — ${projectInfo.storeys.length}`}>
         {projectInfo.storeys.length === 0 ? (

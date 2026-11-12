@@ -1383,17 +1383,22 @@ function chainGroups(ids: number[], focusId?: number, focusAttr?: string, title 
 
 /* ---- Géolocalisation / géoréférencement ---- */
 
+/** Géolocalisation : uniquement l'IfcSite (RefLatitude, RefLongitude, RefElevation). */
+function geolocationGroups(): InspectGroup[] {
+  const site = lastGeo?.sites[0] ?? null
+  return compact([groupOf('Géolocalisation — IfcSite', [
+    site ? inspectLine(site.stepId, {
+      note: 'Position GPS indicative (WGS84) : RefLatitude, RefLongitude, RefElevation (attributs 10 à 12)',
+      keys: { RefLatitude: 'geo.latitude', RefLongitude: 'geo.longitude', RefElevation: 'geo.elevation' },
+    }) : null,
+  ])])
+}
+
+/** Géoréférencement : carte, conversion, placement du terrain, repère et nord — sans la position GPS. */
 function geoGroups(): InspectGroup[] {
   const g = lastGeo
   const site = g?.sites[0] ?? null
   const groups: (InspectGroup | null)[] = []
-
-  groups.push(groupOf('Géolocalisation indicative — IfcSite', [
-    site ? inspectLine(site.stepId, {
-      note: 'Site : RefLatitude, RefLongitude, RefElevation (attributs 10 à 12)',
-      keys: { RefLatitude: 'geo.latitude', RefLongitude: 'geo.longitude', RefElevation: 'geo.elevation', ObjectPlacement: 'site.position' },
-    }) : null,
-  ]))
 
   const crs = g?.crs ?? null
   const unitId = crs ? refId(lineOf(crs.stepId)?.MapUnit) : null
@@ -1424,7 +1429,9 @@ function geoGroups(): InspectGroup[] {
     })
   )))
 
-  const chain: (InspectLine | null)[] = []
+  const chain: (InspectLine | null)[] = site
+    ? [inspectLine(site.stepId, { note: 'Terrain : ObjectPlacement (attribut 6)', keys: { ObjectPlacement: 'site.position' } })]
+    : []
   let plId = site?.placement?.localPlacementStepId ?? null
   for (let depth = 0; plId !== null && depth < 32; depth++) {
     const pl = lineOf(plId)
@@ -1778,14 +1785,16 @@ function inspect(request: InspectRequest): InspectResult {
         request,
         family: request.key.startsWith('geo.') ? 'geolocation' : 'georeference',
         title: GEO_KEY_LABEL[request.key] ?? request.key,
-        subtitle: request.key === 'site.result'
+        subtitle: request.key.startsWith('geo.')
+          ? 'Géolocalisation : position GPS indicative de l’IfcSite (n’est pas un géoréférencement)'
+          : request.key === 'site.result'
           ? 'Résultat = position du site dans le repère du modèle (IfcLocalPlacement) passée dans la conversion (IfcMapConversion)'
-          : 'Sources de géoréférencement du fichier : terrain, carte, conversion, placement, nord',
+          : 'Géoréférencement : carte, conversion, placement du terrain, repère et nord',
         focusKey: request.key,
         focusKeys: request.key === 'site.result'
           ? ['site.position', 'mc.eastings', 'mc.northings', 'mc.orthogonalHeight', 'mc.rotation', 'mc.scale']
           : undefined,
-        groups: geoGroups(),
+        groups: request.key.startsWith('geo.') ? geolocationGroups() : geoGroups(),
       }
     case 'project':
       return { request, ...projectFieldResult(request.field, request.id) }

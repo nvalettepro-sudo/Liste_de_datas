@@ -41,11 +41,13 @@ const large = (name: string) => join(LARGE, name)
 const hasLarge = (name: string) => !!LARGE && existsSync(large(name))
 
 describe('Géoréférencement — jeux de test §10', () => {
-  it('1. IFC2x3.ifc (Archicad, site à l’origine) → GPS_SEUL', () => {
+  it('1. IFC2x3.ifc (Archicad, site à l’origine) → non géoréférencé, mais géolocalisé', () => {
     const g = analyze(join(SMALL, 'IFC2x3.ifc'))
     expect(g.schema).toBe('IFC2X3')
-    expect(g.status).toBe('GPS_SEUL')
-    expect(g.primarySource).toBe('SITE_LATLONG')
+    // La position GPS relève de la géolocalisation, pas du géoréférencement.
+    expect(g.status).toBe('AUCUN')
+    expect(g.primarySource).toBeNull()
+    expect(g.geolocation.located).toBe(true)
     const s = g.sites[0]
     expect(s.stepId).toBe(25)
     expect(s.placement?.pointStepId).toBe(84)
@@ -71,11 +73,12 @@ describe('Géoréférencement — jeux de test §10', () => {
     expect(g.checks.find((c) => c.code === 'PIEGE_04_REFELEVATION')?.severity).toBe('info')
   })
 
-  it('IFC4-3.ifc (Archicad, IFC4.3, site à l’origine) → GPS_SEUL', () => {
+  it('IFC4-3.ifc (Archicad, IFC4.3, site à l’origine) → non géoréférencé, mais géolocalisé', () => {
     const g = analyze(join(SMALL, 'IFC4-3.ifc'))
     expect(g.schema).toBe('IFC4X3')
     expect(g.fileSchemaRaw).toBe('IFC4X3_ADD2')
-    expect(g.status).toBe('GPS_SEUL')
+    expect(g.status).toBe('AUCUN')
+    expect(g.geolocation.located).toBe(true)
     expect(g.mapConversion).toBeNull()
     expect(codes(g)).toContain('CASE_04_NO_CONVERSION')
   })

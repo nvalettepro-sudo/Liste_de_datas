@@ -213,10 +213,9 @@ export type GeoStatus =
   | 'GEOREF_IDENTITE'
   | 'GEOREF_SANS_CRS'
   | 'POSITION_LOCALE'
-  | 'GPS_SEUL'
   | 'AUCUN'
 
-export type GeoPrimarySource = 'MAP_CONVERSION' | 'SITE_PLACEMENT' | 'SITE_LATLONG' | null
+export type GeoPrimarySource = 'MAP_CONVERSION' | 'SITE_PLACEMENT' | null
 
 export interface XYZ {
   x: number
@@ -315,6 +314,12 @@ export interface GeoAnalysis {
   status: GeoStatus
   statusCertainty: Certainty
   primarySource: GeoPrimarySource
+  /**
+   * Géolocalisation : position GPS indicative (IfcSite.RefLatitude /
+   * RefLongitude / RefElevation). Notion distincte du géoréférencement :
+   * elle situe le projet sur le globe mais ne le positionne pas.
+   */
+  geolocation: { located: boolean; siteStepId: number | null }
   mapConversion: GeoMapConversion | null
   otherMapConversions: GeoMapConversion[]
   crs: GeoCrs | null

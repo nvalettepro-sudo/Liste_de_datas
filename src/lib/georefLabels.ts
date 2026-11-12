@@ -22,14 +22,9 @@ export const STATUS_INFO: Record<GeoStatus, { label: string; text: string; tone:
     text: 'Le terrain a des coordonnées, mais aucune carte n’est déclarée. C’est le cas normal en IFC 2x3.',
     tone: 'mid',
   },
-  GPS_SEUL: {
-    label: 'Situé approximativement',
-    text: 'Seule une position GPS indicative est donnée.',
-    tone: 'low',
-  },
   AUCUN: {
     label: 'Non géoréférencé',
-    text: 'Le fichier ne dit pas où se trouve la maquette.',
+    text: 'Le fichier ne donne ni conversion vers une carte, ni coordonnées de terrain.',
     tone: 'none',
   },
 }

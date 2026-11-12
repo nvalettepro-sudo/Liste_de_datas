@@ -144,7 +144,8 @@ export function GeorefPanel({ g }: { g: GeoAnalysis }) {
     none: 'border-gray-700 bg-gray-900 text-gray-400',
   }[st.tone]
   const S = g.schema
-  const warns = g.checks.filter((c) => c.severity === 'warn').length
+  const georefChecks = g.checks.filter((c) => !c.key?.startsWith('geo.'))
+  const warns = georefChecks.filter((c) => c.severity === 'warn').length
   const crsName = g.crs?.name ?? (g.crs?.wkt ? 'carte (WKT)' : null)
 
   /* Valeur principale */
@@ -185,16 +186,8 @@ export function GeorefPanel({ g }: { g: GeoAnalysis }) {
         {g.status === 'GEOREF_IDENTITE' && <GRow schema={S} labelKey="crs.name" step={g.crs?.stepId} value={crsName} req={geo('crs.name')} />}
       </>
     )
-  } else if (g.primarySource === 'SITE_LATLONG' && site) {
-    primary = (
-      <>
-        <p className="text-[11px] text-gray-300 leading-snug pb-1">Position GPS indicative du terrain : elle situe le projet, sans le positionner précisément.</p>
-        <GRow schema={S} label="Latitude" step={site.stepId} value={site.refLatitude?.dms} req={geo('geo.latitude')} strong />
-        <GRow schema={S} label="Longitude" step={site.stepId} value={site.refLongitude?.dms} req={geo('geo.longitude')} strong />
-      </>
-    )
   } else {
-    primary = <p className="text-gray-600 italic py-0.5">Aucune source de position dans le fichier.</p>
+    primary = <p className="text-gray-600 italic py-0.5">Ni conversion vers une carte, ni coordonnées de terrain dans le fichier.</p>
   }
 
   return (
@@ -203,6 +196,7 @@ export function GeorefPanel({ g }: { g: GeoAnalysis }) {
       <div className="border border-amber-700/70 bg-amber-950/10">
         <div className="px-2.5 pt-1.5">
           <p className="text-xs font-semibold uppercase tracking-wider text-amber-300">Géoréférencement</p>
+          <p className="text-[10px] text-gray-500 leading-snug">Où la maquette est posée sur une carte (coordonnées projetées X, Y, Z / E, N, H).</p>
           <div className="flex flex-wrap items-center gap-1 mt-1">
             <span className={`px-1.5 py-0.5 text-[11px] font-medium rounded border ${tone}`}>{st.label}</span>
             <CertaintyBadge c={g.statusCertainty} schema={S} />
@@ -301,26 +295,6 @@ export function GeorefPanel({ g }: { g: GeoAnalysis }) {
         </Block>
       )}
 
-      {/* GPS indicatif (§4.6) — jamais principal sauf GPS_SEUL */}
-      {g.primarySource !== 'SITE_LATLONG' && (
-        <Block title="Position GPS indicative" source={site ? `IfcSite #${site.stepId} — RefLatitude, RefLongitude, RefElevation` : 'IfcSite'} help={GEO_LABELS['site.latlong'].detail}>
-          <GRow schema={S} label="Latitude" step={site?.stepId} value={site?.refLatitude?.dms} req={geo('geo.latitude')} />
-          <GRow schema={S} label="Longitude" step={site?.stepId} value={site?.refLongitude?.dms} req={geo('geo.longitude')} />
-          {site?.refLatitude && site.refLongitude && (
-            <GRow schema={S} label="Décimal" value={`${dec6(site.refLatitude.decimal)} ; ${dec6(site.refLongitude.decimal)}`} req={geo('geo.latitude')} />
-          )}
-          <GRow schema={S} labelKey="site.elevation" step={site?.stepId} value={site?.refElevation !== null && site?.refElevation !== undefined ? `${fmtLen(site.refElevation, toM)} m` : null} req={geo('geo.elevation')} />
-        </Block>
-      )}
-      {g.primarySource === 'SITE_LATLONG' && site && (
-        <Block title="Altitude et décimal" source={`IfcSite #${site.stepId}`} help={GEO_LABELS['site.latlong'].detail}>
-          {site.refLatitude && site.refLongitude && (
-            <GRow schema={S} label="Décimal" value={`${dec6(site.refLatitude.decimal)} ; ${dec6(site.refLongitude.decimal)}`} req={geo('geo.latitude')} />
-          )}
-          <GRow schema={S} labelKey="site.elevation" step={site.stepId} value={site.refElevation !== null ? `${fmtLen(site.refElevation, toM)} m` : null} req={geo('geo.elevation')} />
-        </Block>
-      )}
-
       {/* Nord et repère du projet (fiche 4.7) */}
       <Block title="Nord et repère du projet" source={g.context ? `IfcGeometricRepresentationContext #${g.context.stepId}` : undefined} help={GEO_LABELS['ctx.trueNorth'].detail}>
         {g.context ? (
@@ -338,7 +312,7 @@ export function GeorefPanel({ g }: { g: GeoAnalysis }) {
 
       {/* Contrôles et avertissements (§5) */}
       <Block title={`Contrôles — ${warns} alerte${warns > 1 ? 's' : ''}`}>
-        {g.checks.map((c, i) => (
+        {georefChecks.map((c, i) => (
           <div key={i} className="flex gap-1.5 py-0.5 leading-snug" title={c.code}>
             <span className={c.severity === 'warn' ? 'text-amber-400' : c.severity === 'ok' ? 'text-emerald-400' : 'text-gray-500'}>
               {c.severity === 'warn' ? '⚠' : c.severity === 'ok' ? '✓' : 'ℹ'}
@@ -349,8 +323,65 @@ export function GeorefPanel({ g }: { g: GeoAnalysis }) {
             </span>
           </div>
         ))}
-        {g.checks.length === 0 && <p className="text-gray-600 italic">Aucun contrôle déclenché.</p>}
+        {georefChecks.length === 0 && <p className="text-gray-600 italic">Aucun contrôle déclenché.</p>}
       </Block>
     </>
+  )
+}
+
+/**
+ * Géolocalisation : position GPS indicative du terrain (IfcSite.RefLatitude,
+ * RefLongitude, RefElevation), en WGS84. Notion distincte du
+ * géoréférencement : elle situe le projet sur le globe, elle ne positionne
+ * pas la maquette sur une carte.
+ */
+export function GeolocationPanel({ g }: { g: GeoAnalysis }) {
+  const toM = g.lengthUnit.toMetre
+  const S = g.schema
+  const site = g.sites[0] ?? null
+  const located = g.geolocation.located
+  const checks = g.checks.filter((c) => c.key?.startsWith('geo.'))
+  return (
+    <div className="border border-sky-800/70 bg-sky-950/10">
+      <div className="flex items-start gap-1 px-2.5 pt-1.5">
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wider text-sky-300">Géolocalisation</p>
+          <p className="text-[10px] text-gray-500 leading-snug">Position GPS indicative (latitude, longitude) — ce n’est pas un géoréférencement.</p>
+          <div className="flex flex-wrap items-center gap-1 mt-1">
+            <span className={`px-1.5 py-0.5 text-[11px] font-medium rounded border ${located ? 'border-sky-700 bg-sky-950/40 text-sky-300' : 'border-gray-700 bg-gray-900 text-gray-400'}`}>
+              {located ? 'Géolocalisé (indicatif)' : 'Non géolocalisé'}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className="px-2.5 pb-2 pt-1.5 text-xs space-y-0.5">
+        {site ? (
+          <>
+            <p className="text-[10px] font-mono text-gray-600">IfcSite #{site.stepId} — RefLatitude, RefLongitude, RefElevation (WGS84)</p>
+            <GRow schema={S} label="Latitude" step={site.stepId} value={site.refLatitude?.dms} req={geo('geo.latitude')} strong />
+            <GRow schema={S} label="Longitude" step={site.stepId} value={site.refLongitude?.dms} req={geo('geo.longitude')} strong />
+            {site.refLatitude && site.refLongitude && (
+              <GRow schema={S} label="Décimal" value={`${dec6(site.refLatitude.decimal)} ; ${dec6(site.refLongitude.decimal)}`} req={geo('geo.latitude')} />
+            )}
+            <GRow schema={S} labelKey="site.elevation" step={site.stepId}
+              value={site.refElevation !== null ? `${fmtLen(site.refElevation, toM)} m` : null} req={geo('geo.elevation')} />
+            <p className="text-[10px] text-gray-500 leading-snug pt-1" title={GEO_LABELS['site.latlong'].detail}>
+              Elle situe le projet sur le globe, approximativement ; elle ne place pas la maquette sur une carte.
+            </p>
+            {checks.map((c, i) => (
+              <div key={i} className="flex gap-1.5 py-0.5 leading-snug" title={c.code}>
+                <span className={c.severity === 'warn' ? 'text-amber-400' : 'text-gray-500'}>{c.severity === 'warn' ? '⚠' : 'ℹ'}</span>
+                <span className="text-gray-300 min-w-0">
+                  {c.key ? <IfcLink request={geo(c.key)}>{c.text}</IfcLink> : c.text}
+                  <CertaintyBadge c={c.certainty} schema={S} />
+                </span>
+              </div>
+            ))}
+          </>
+        ) : (
+          <p className="text-gray-600 italic py-0.5">Aucun IfcSite.</p>
+        )}
+      </div>
+    </div>
   )
 }

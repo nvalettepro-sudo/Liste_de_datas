@@ -466,11 +466,10 @@ export function analyzeGeoreference(r: IfcReader): GeoAnalysis {
     status = 'POSITION_LOCALE'
     statusCertainty = schema === 'IFC2X3' ? 'VERIFIE_2X3' : 'HYPOTHESE'
     primarySource = 'SITE_PLACEMENT'
-  } else if (site?.refLatitude && site.refLongitude) {
-    status = 'GPS_SEUL'
-    statusCertainty = 'HYPOTHESE'
-    primarySource = 'SITE_LATLONG'
   } else {
+    // La position GPS (RefLatitude/RefLongitude) relève de la géolocalisation,
+    // pas du géoréférencement : sans conversion ni position de terrain, le
+    // fichier n'est pas géoréférencé, même s'il est géolocalisé.
     status = 'AUCUN'
     statusCertainty = 'STANDARD'
     primarySource = null
@@ -531,6 +530,7 @@ export function analyzeGeoreference(r: IfcReader): GeoAnalysis {
   return {
     schema, fileSchemaRaw, authoringTool, coordinateBase, lengthUnit,
     status, statusCertainty, primarySource,
+    geolocation: { located: !!(site?.refLatitude && site.refLongitude), siteStepId: site?.stepId ?? null },
     mapConversion, otherMapConversions, crs, sites, context, checks,
   }
 }
