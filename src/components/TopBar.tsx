@@ -21,6 +21,7 @@ export function TopBar() {
   const isSearching = useStore((s) => s.isSearching)
   const loadFile = useStore((s) => s.loadFile)
   const openGraphOverview = useStore((s) => s.openGraphOverview)
+  const closeFile = useStore((s) => s.closeFile)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -47,6 +48,15 @@ export function TopBar() {
   return (
     <div className="flex-shrink-0">
       <div className="flex items-center h-12 px-4 gap-4 bg-gray-900 border-b border-gray-800">
+        {fileName && (
+          <button
+            onClick={closeFile}
+            className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-300 border border-gray-700 hover:border-gray-500 hover:text-white transition-colors flex-shrink-0"
+            title="Réinitialiser l'application et charger un autre fichier IFC"
+          >
+            <span aria-hidden>↺</span> Réinitialiser
+          </button>
+        )}
         <label
           htmlFor="topbar-file"
           className="flex items-center gap-2 cursor-pointer group"
