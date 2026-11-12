@@ -7,6 +7,7 @@ import {
   MarkerType,
   type Node,
   type Edge,
+  type EdgeMouseHandler,
   type NodeMouseHandler,
   type OnNodeDrag,
   type ReactFlowInstance,
@@ -15,6 +16,7 @@ import '@xyflow/react/dist/style.css'
 
 import { useStore } from '../../store/useStore'
 import { REL_META } from '../../lib/graphMeta'
+import type { GraphRelType } from '../../lib/types'
 import { IFC_FR } from '../../lib/ifcTranslations'
 import { computeHomeHubs } from '../../lib/hubLayout'
 import { GraphNodeCard, type GraphNodeCardData } from './GraphNodeCard'
@@ -50,6 +52,7 @@ export function GraphView() {
   const setGraphNodePosition = useStore((s) => s.setGraphNodePosition)
   const moveGraphGroup = useStore((s) => s.moveGraphGroup)
   const relayoutGraph = useStore((s) => s.relayoutGraph)
+  const inspect = useStore((s) => s.inspect)
   const rfInstance = useRef<ReactFlowInstance | null>(null)
 
   /**
@@ -124,7 +127,11 @@ export function GraphView() {
                 id: n.id,
                 type: 'hubNode',
                 position: graphPositions[n.id] ?? { x: 0, y: 0 },
-                data: { relType: n.relType, count: n.count } satisfies HubNodeCardData,
+                data: {
+                  relType: n.relType,
+                  count: n.count,
+                  inspectRequest: graphRootId ? { kind: 'relations', relType: n.relType, nodeId: graphRootId } : undefined,
+                } satisfies HubNodeCardData,
               }
             : {
                 id: n.id,
@@ -188,6 +195,17 @@ export function GraphView() {
   const onNodeDragStop: OnNodeDrag = useCallback(
     (_evt, node) => setGraphNodePosition(node.id, node.position),
     [setGraphNodePosition]
+  )
+
+  /** Clic sur un lien : les lignes IfcRel… qui relient l'entité au hub. */
+  const onEdgeClick: EdgeMouseHandler = useCallback(
+    (_evt, edge) => {
+      const data = edge.data as { relType: GraphRelType } | undefined
+      if (!data) return
+      const entityId = edge.source.startsWith('hub:') ? edge.target : edge.source
+      inspect({ kind: 'relations', relType: data.relType, nodeId: entityId })
+    },
+    [inspect]
   )
 
   const centerView = useCallback(() => {
@@ -275,6 +293,7 @@ export function GraphView() {
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
+              onEdgeClick={onEdgeClick}
               fitView
               minZoom={0.1}
               maxZoom={2}

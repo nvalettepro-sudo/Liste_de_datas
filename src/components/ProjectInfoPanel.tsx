@@ -1,30 +1,19 @@
 import { useState, type ReactNode } from 'react'
 import { useStore } from '../store/useStore'
+import { IfcLink } from './IfcLink'
+import type { InspectRequest } from '../lib/types'
 
 /**
- * Ligne libellé : valeur. Avec `codeKey`, la valeur devient cliquable et
- * affiche à droite la ligne du fichier IFC d'où elle provient.
+ * Ligne libellé : valeur. Avec `req`, la valeur devient cliquable et ouvre
+ * à droite la ligne du fichier IFC d'où elle provient.
  */
-function Row({ label, value, codeKey }: { label: string; value: ReactNode; codeKey?: string }) {
-  const geoCodeKey = useStore((s) => s.geoCodeKey)
-  const showGeoCode = useStore((s) => s.showGeoCode)
+function Row({ label, value, req }: { label: string; value: ReactNode; req?: InspectRequest }) {
   if (value === null || value === undefined || value === '') return null
-  const active = codeKey !== undefined && codeKey === geoCodeKey
   return (
     <div className="flex items-baseline justify-between gap-2 py-0.5">
       <span className="text-gray-500 flex-shrink-0">{label}</span>
-      {codeKey ? (
-        <button
-          onClick={() => showGeoCode(active ? null : codeKey)}
-          title="Voir la valeur dans le code IFC"
-          className={`text-right break-words min-w-0 underline decoration-dotted underline-offset-2 transition-colors ${
-            active
-              ? codeKey.startsWith('geo.') ? 'text-sky-200 decoration-sky-300' : 'text-amber-200 decoration-amber-300'
-              : 'text-gray-200 decoration-gray-600 hover:text-white hover:decoration-gray-300'
-          }`}
-        >
-          {value}
-        </button>
+      {req ? (
+        <IfcLink request={req} className="text-gray-200 text-right break-words min-w-0">{value}</IfcLink>
       ) : (
         <span className="text-gray-200 text-right break-words min-w-0">{value}</span>
       )}
@@ -79,29 +68,30 @@ export function ProjectInfoPanel() {
   return (
     <div className="flex-1 overflow-y-auto px-2 py-2 space-y-2">
       <Section title="Projet">
-        <Row label="Nom" value={projectInfo.projectName} />
-        <Row label="Désignation" value={projectInfo.projectLongName} />
-        <Row label="Phase" value={projectInfo.projectPhase} />
-        <Row label="Bâtiment" value={projectInfo.buildingName} />
-        <Row label="Schéma" value={projectInfo.schema} />
-        <Row label="MVD" value={projectInfo.mvd} />
+        <Row label="Nom" value={projectInfo.projectName} req={{ kind: 'project', field: 'project.Name' }} />
+        <Row label="Désignation" value={projectInfo.projectLongName} req={{ kind: 'project', field: 'project.LongName' }} />
+        <Row label="Phase" value={projectInfo.projectPhase} req={{ kind: 'project', field: 'project.Phase' }} />
+        <Row label="Bâtiment" value={projectInfo.buildingName} req={{ kind: 'project', field: 'building.Name' }} />
+        <Row label="Schéma" value={projectInfo.schema} req={{ kind: 'project', field: 'schema' }} />
+        <Row label="MVD" value={projectInfo.mvd} req={{ kind: 'project', field: 'mvd' }} />
       </Section>
 
       <Section title="Site">
-        <Row label="Nom" value={projectInfo.siteName} />
-        <Row label="Adresse" value={projectInfo.siteAddress} />
+        <Row label="Nom" value={projectInfo.siteName} req={{ kind: 'project', field: 'site.Name' }} />
+        <Row label="Adresse" value={projectInfo.siteAddress} req={{ kind: 'project', field: 'site.Address' }} />
       </Section>
 
       <Section title="Géolocalisation">
         {geolocation && (geolocation.latitude !== null || geolocation.longitude !== null) ? (
           <>
-            <Row label="Latitude" value={geolocation.latitudeDms} codeKey="geo.latitude" />
-            <Row label="Longitude" value={geolocation.longitudeDms} codeKey="geo.longitude" />
+            <Row label="Latitude" value={geolocation.latitudeDms} req={{ kind: 'geo', key: 'geo.latitude' }} />
+            <Row label="Longitude" value={geolocation.longitudeDms} req={{ kind: 'geo', key: 'geo.longitude' }} />
             <Row
               label="Décimal"
               value={`${geolocation.latitude?.toFixed(6)}° ; ${geolocation.longitude?.toFixed(6)}°`}
+              req={{ kind: 'geo', key: 'geo.latitude' }}
             />
-            <Row label="Altitude (RefElevation)" value={fmt(geolocation.elevation, 2)} codeKey="geo.elevation" />
+            <Row label="Altitude (RefElevation)" value={fmt(geolocation.elevation, 2)} req={{ kind: 'geo', key: 'geo.elevation' }} />
           </>
         ) : (
           <Empty>Latitude/longitude non renseignées (IfcSite.RefLatitude / RefLongitude)</Empty>
@@ -113,13 +103,13 @@ export function ProjectInfoPanel() {
           <>
             {georeference.crs ? (
               <>
-                <Row label="Système" value={georeference.crs.name} codeKey="crs.name" />
-                <Row label="Description" value={georeference.crs.description} codeKey="crs.description" />
-                <Row label="Datum géodésique" value={georeference.crs.geodeticDatum} codeKey="crs.geodeticDatum" />
-                <Row label="Datum vertical" value={georeference.crs.verticalDatum} codeKey="crs.verticalDatum" />
-                <Row label="Projection" value={georeference.crs.mapProjection} codeKey="crs.mapProjection" />
-                <Row label="Zone" value={georeference.crs.mapZone} codeKey="crs.mapZone" />
-                <Row label="Unité" value={georeference.crs.mapUnit} codeKey="crs.mapUnit" />
+                <Row label="Système" value={georeference.crs.name} req={{ kind: 'geo', key: 'crs.name' }} />
+                <Row label="Description" value={georeference.crs.description} req={{ kind: 'geo', key: 'crs.description' }} />
+                <Row label="Datum géodésique" value={georeference.crs.geodeticDatum} req={{ kind: 'geo', key: 'crs.geodeticDatum' }} />
+                <Row label="Datum vertical" value={georeference.crs.verticalDatum} req={{ kind: 'geo', key: 'crs.verticalDatum' }} />
+                <Row label="Projection" value={georeference.crs.mapProjection} req={{ kind: 'geo', key: 'crs.mapProjection' }} />
+                <Row label="Zone" value={georeference.crs.mapZone} req={{ kind: 'geo', key: 'crs.mapZone' }} />
+                <Row label="Unité" value={georeference.crs.mapUnit} req={{ kind: 'geo', key: 'crs.mapUnit' }} />
               </>
             ) : (
               <Empty>Aucun système de coordonnées (IfcProjectedCRS)</Empty>
@@ -128,9 +118,9 @@ export function ProjectInfoPanel() {
             <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Position du site (X, Y, Z)</p>
             {georeference.sitePosition ? (
               <>
-                <Row label="X" value={fmt(georeference.sitePosition.x, 2)} codeKey="site.position" />
-                <Row label="Y" value={fmt(georeference.sitePosition.y, 2)} codeKey="site.position" />
-                <Row label="Z" value={fmt(georeference.sitePosition.z, 2)} codeKey="site.position" />
+                <Row label="X" value={fmt(georeference.sitePosition.x, 2)} req={{ kind: 'geo', key: 'site.position' }} />
+                <Row label="Y" value={fmt(georeference.sitePosition.y, 2)} req={{ kind: 'geo', key: 'site.position' }} />
+                <Row label="Z" value={fmt(georeference.sitePosition.z, 2)} req={{ kind: 'geo', key: 'site.position' }} />
               </>
             ) : (
               <Empty>Placement de l'IfcSite absent</Empty>
@@ -139,11 +129,11 @@ export function ProjectInfoPanel() {
             <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Conversion (IfcMapConversion)</p>
             {georeference.mapConversion ? (
               <>
-                <Row label="Eastings (X)" value={fmt(georeference.mapConversion.eastings)} codeKey="mc.eastings" />
-                <Row label="Northings (Y)" value={fmt(georeference.mapConversion.northings)} codeKey="mc.northings" />
-                <Row label="Hauteur orth. (Z)" value={fmt(georeference.mapConversion.orthogonalHeight)} codeKey="mc.orthogonalHeight" />
-                <Row label="Rotation" value={`${fmt(georeference.mapConversion.rotation)}°`} codeKey="mc.rotation" />
-                <Row label="Échelle" value={fmt(georeference.mapConversion.scale, 0)} codeKey="mc.scale" />
+                <Row label="Eastings (X)" value={fmt(georeference.mapConversion.eastings)} req={{ kind: 'geo', key: 'mc.eastings' }} />
+                <Row label="Northings (Y)" value={fmt(georeference.mapConversion.northings)} req={{ kind: 'geo', key: 'mc.northings' }} />
+                <Row label="Hauteur orth. (Z)" value={fmt(georeference.mapConversion.orthogonalHeight)} req={{ kind: 'geo', key: 'mc.orthogonalHeight' }} />
+                <Row label="Rotation" value={`${fmt(georeference.mapConversion.rotation)}°`} req={{ kind: 'geo', key: 'mc.rotation' }} />
+                <Row label="Échelle" value={fmt(georeference.mapConversion.scale, 0)} req={{ kind: 'geo', key: 'mc.scale' }} />
                 {georeference.projectedPosition && georeference.sitePosition &&
                   (Math.abs(georeference.projectedPosition.x - georeference.sitePosition.x) > 0.005 ||
                     Math.abs(georeference.projectedPosition.y - georeference.sitePosition.y) > 0.005 ||
@@ -167,7 +157,7 @@ export function ProjectInfoPanel() {
             <Row
               label="Nord vrai"
               value={georeference.trueNorth !== null ? `${fmt(georeference.trueNorth)}°` : null}
-              codeKey="trueNorth"
+              req={{ kind: 'geo', key: 'trueNorth' }}
             />
           </>
         ) : (
@@ -184,19 +174,20 @@ export function ProjectInfoPanel() {
               key={i}
               label={s.name ?? `Étage ${i + 1}`}
               value={s.elevation != null ? `${fmt(s.elevation, 2)} m` : '—'}
+              req={{ kind: 'project', field: 'storey', id: s.id }}
             />
           ))
         )}
       </Section>
 
       <Section title="Logiciel & historique" defaultOpen={false}>
-        <Row label="Application" value={ownerHistory?.applicationName} />
-        <Row label="Version" value={ownerHistory?.applicationVersion} />
-        <Row label="Éditeur" value={ownerHistory?.applicationDeveloper} />
-        <Row label="Auteur" value={ownerHistory?.personName} />
-        <Row label="Organisation" value={ownerHistory?.organizationName} />
-        <Row label="Créé le" value={ownerHistory?.creationDate} />
-        <Row label="Modifié le" value={ownerHistory?.lastModifiedDate} />
+        <Row label="Application" value={ownerHistory?.applicationName} req={{ kind: 'project', field: 'owner.application' }} />
+        <Row label="Version" value={ownerHistory?.applicationVersion} req={{ kind: 'project', field: 'owner.version' }} />
+        <Row label="Éditeur" value={ownerHistory?.applicationDeveloper} req={{ kind: 'project', field: 'owner.developer' }} />
+        <Row label="Auteur" value={ownerHistory?.personName} req={{ kind: 'project', field: 'owner.person' }} />
+        <Row label="Organisation" value={ownerHistory?.organizationName} req={{ kind: 'project', field: 'owner.organization' }} />
+        <Row label="Créé le" value={ownerHistory?.creationDate} req={{ kind: 'project', field: 'owner.creationDate' }} />
+        <Row label="Modifié le" value={ownerHistory?.lastModifiedDate} req={{ kind: 'project', field: 'owner.lastModifiedDate' }} />
         {!ownerHistory && <p className="text-gray-700 italic">IfcOwnerHistory absent</p>}
       </Section>
 
@@ -206,7 +197,7 @@ export function ProjectInfoPanel() {
         ) : (
           projectInfo.units.map((u, i) => (
             <p key={i} className="text-gray-300 py-0.5">
-              {u.label}
+              <IfcLink request={{ kind: 'project', field: 'unit', id: u.id }}>{u.label}</IfcLink>
             </p>
           ))
         )}

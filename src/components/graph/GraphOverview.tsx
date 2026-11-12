@@ -21,6 +21,7 @@ import { computeHomeHubs } from '../../lib/hubLayout'
 import { TypeNodeCard, type TypeNodeCardData } from './TypeNodeCard'
 import { HubNodeCard, type HubNodeCardData } from './HubNodeCard'
 import { FloatingEdge } from './FloatingEdge'
+import { IfcLink } from '../IfcLink'
 
 const nodeTypes = { typeNode: TypeNodeCard, hubNode: HubNodeCard }
 const edgeTypes = { floating: FloatingEdge }
@@ -30,6 +31,9 @@ interface SelectedEdgeInfo {
   targetLabel: string
   relType: GraphRelType
   count: number
+  /** Type relating / related selon le sens de l'arête (l'autre extrémité est le hub). */
+  sourceType?: string
+  targetType?: string
 }
 
 export function GraphOverview() {
@@ -78,7 +82,7 @@ export function GraphOverview() {
               id: n.id,
               type: 'hubNode',
               position: overviewPositions[n.id] ?? { x: 0, y: 0 },
-              data: { relType: n.relType!, count: n.count } satisfies HubNodeCardData,
+              data: { relType: n.relType!, count: n.count, inspectRequest: { kind: 'relations', relType: n.relType! } } satisfies HubNodeCardData,
             }
           : {
               id: n.id,
@@ -134,11 +138,14 @@ export function GraphOverview() {
     (_evt, edge) => {
       const data = edge.data as { relType: GraphRelType; count: number } | undefined
       if (!data) return
+      const sourceIsHub = edge.source.startsWith('hub:')
       setSelectedEdge({
         sourceLabel: labelById.get(edge.source) ?? edge.source,
         targetLabel: labelById.get(edge.target) ?? edge.target,
         relType: data.relType,
         count: data.count,
+        sourceType: sourceIsHub ? undefined : edge.source,
+        targetType: sourceIsHub ? edge.target : undefined,
       })
     },
     [labelById]
@@ -204,7 +211,12 @@ export function GraphOverview() {
             </span>
             <span className="text-gray-600 font-mono"> ({selectedEdge.relType})</span>
             {' × '}
-            {selectedEdge.count.toLocaleString('fr-FR')}
+            <IfcLink
+              request={{ kind: 'relations', relType: selectedEdge.relType, sourceType: selectedEdge.sourceType, targetType: selectedEdge.targetType }}
+              title="Voir ces relations dans le code IFC"
+            >
+              {selectedEdge.count.toLocaleString('fr-FR')}
+            </IfcLink>
           </span>
         )}
 

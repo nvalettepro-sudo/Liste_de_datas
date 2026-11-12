@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useStore } from '../store/useStore'
 import { IFC_FR, ALLOWED_IFC_TYPES } from '../lib/ifcTranslations'
 import { ProjectInfoPanel } from './ProjectInfoPanel'
+import { IfcLink } from './IfcLink'
 import type { EntityTypeSummary } from '../lib/types'
 
 type SortMode = 'count' | 'alpha'
@@ -22,9 +23,12 @@ function EntityRow({
   const barWidth = maxCount > 0 ? (summary.count / maxCount) * 100 : 0
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className={`w-full text-left px-3 py-2 group focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 ${
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick() }}
+      className={`w-full text-left px-3 py-2 group cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 ${
         selected ? 'bg-blue-900/60' : 'hover:bg-gray-800'
       }`}
     >
@@ -47,13 +51,14 @@ function EntityRow({
             {summary.type}
           </span>
         </div>
-        <span
-          className={`text-xs tabular-nums flex-shrink-0 ${
-            selected ? 'text-blue-300' : 'text-gray-600'
-          }`}
+        <IfcLink
+          request={{ kind: 'instances', entityType: summary.type }}
+          stop
+          title="Voir les instances dans le code IFC"
+          className={`text-xs tabular-nums flex-shrink-0 ${selected ? 'text-blue-300' : 'text-gray-600'}`}
         >
           {summary.count.toLocaleString('fr-FR')}
-        </span>
+        </IfcLink>
       </div>
       <div className="mt-1 h-0.5 bg-gray-800">
         <div
@@ -63,7 +68,7 @@ function EntityRow({
           style={{ width: `${barWidth}%` }}
         />
       </div>
-    </button>
+    </div>
   )
 }
 

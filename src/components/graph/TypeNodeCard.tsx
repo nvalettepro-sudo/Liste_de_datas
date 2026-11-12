@@ -3,6 +3,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { IFC_FR } from '../../lib/ifcTranslations'
 import { useStore } from '../../store/useStore'
 import type { TypeGraphNode } from '../../lib/types'
+import { IfcLink } from '../IfcLink'
 
 export interface TypeNodeCardData extends Record<string, unknown> {
   node: TypeGraphNode
@@ -35,7 +36,11 @@ function TypeNodeCardImpl({ id, data, selected }: NodeProps) {
 
       <p className="text-sm font-semibold text-gray-100 truncate pr-3">{fr ?? node.entityType}</p>
       {fr && <p className="text-[11px] font-mono text-gray-500 leading-tight truncate">{node.entityType}</p>}
-      <p className="text-xs text-gray-500 tabular-nums mt-1">{node.count.toLocaleString('fr-FR')}</p>
+      <p className="text-xs text-gray-500 tabular-nums mt-1">
+        <IfcLink request={{ kind: 'instances', entityType: node.entityType }} stop title="Voir les instances dans le code IFC">
+          {node.count.toLocaleString('fr-FR')}
+        </IfcLink>
+      </p>
       <p className="text-[10px] text-gray-600 mt-1">⊕ double-clic pour explorer</p>
 
       <Handle type="source" position={Position.Bottom} className="!bg-gray-600 !w-1.5 !h-1.5 !border-0" />

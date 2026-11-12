@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { IFC_FR } from '../../lib/ifcTranslations'
 import type { GraphNode } from '../../lib/types'
+import { IfcLink } from '../IfcLink'
 
 /** Palette par catégorie de nœud — cohérente avec la légende du panneau de filtres. */
 export const KIND_STYLES: Record<GraphNode['kind'], { box: string; dot: string; label: string }> = {
@@ -40,7 +41,7 @@ function GraphNodeCardImpl({ data, selected }: NodeProps) {
 
   return (
     <div
-      className={`px-3 py-2 border rounded min-w-[150px] max-w-[230px] transition-shadow ${style.box} ${
+      className={`group relative px-3 py-2 border rounded min-w-[150px] max-w-[230px] transition-shadow ${style.box} ${
         selected ? 'ring-2 ring-blue-400' : ''
       } ${isRoot ? 'ring-2 ring-white/70' : ''}`}
       title={node.globalId ? `GUID : ${node.globalId}` : undefined}
@@ -50,6 +51,16 @@ function GraphNodeCardImpl({ data, selected }: NodeProps) {
       <div className="flex items-center gap-1.5 mb-0.5">
         <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${style.dot}`} />
         <span className="text-[10px] font-mono text-gray-400 truncate">{node.entityType}</span>
+        <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+          <IfcLink
+            request={{ kind: 'instances', entityType: node.entityType, nodeId: node.id }}
+            stop
+            className="text-[10px] text-gray-400"
+            title={node.kind === 'group' ? 'Voir les membres dans le code IFC' : 'Voir la ligne IFC'}
+          >
+            {node.expressId ? `#${node.expressId}` : 'code'}
+          </IfcLink>
+        </span>
       </div>
 
       <p className="text-xs text-gray-100 leading-snug break-words">{node.label}</p>

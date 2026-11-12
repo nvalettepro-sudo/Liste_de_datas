@@ -23,9 +23,14 @@ import type {
   StoreyInfo,
   GeoReference,
   GeoLocation,
-  GeoCodeGroup,
-  GeoCodeLine,
   XYZ,
+  InspectArg,
+  InspectLine,
+  InspectGroup,
+  InspectOccurrence,
+  InspectRequest,
+  InspectResult,
+  InspectFamily,
   OwnerHistoryInfo,
   UnitInfo,
 } from '../lib/types'
@@ -39,6 +44,10 @@ const typeCodeMap = new Map<string, number>()
 const entityPsetMap = new Map<number, PsetData[]>()
 const storeyCache = new Map<number, string | null>()
 const aggregationCache = new Map<string, AggregatedEntityData>()
+
+/** Octets du fichier et position de départ de chaque ligne « #id= » — l'inspecteur ne décode que la ligne demandée. */
+let fileBytes: Uint8Array | null = null
+const lineIndex = new Map<number, number>()
 
 function post(msg: WorkerOutMessage) {
   self.postMessage(msg)
@@ -136,11 +145,19 @@ function extractPsetFromLine(pDef: Record<string, unknown>): PsetData | null {
         }
       }
 
-      properties.push({ name: propName, value: propValue, unit })
+      properties.push({
+        name: propName,
+        value: propValue,
+        unit,
+        id: pRef.value as number,
+        valueAttr: isQuantity
+          ? ['LengthValue', 'AreaValue', 'VolumeValue', 'WeightValue', 'CountValue', 'TimeValue'].find((k) => prop[k] !== undefined && prop[k] !== null)
+          : 'NominalValue',
+      })
     }
   }
 
-  return { name: psetName, isStandard, properties }
+  return { name: psetName, isStandard, properties, id: pDef.expressID as number }
 }
 
 function buildPsetMap() {
@@ -163,6 +180,7 @@ function buildPsetMap() {
 
     const pset = extractPsetFromLine(pDef as Record<string, unknown>)
     if (!pset) continue
+    pset.relId = rels.get(i)
 
     for (const objRef of relatedObjects) {
       const o = objRef as Record<string, unknown>
@@ -261,7 +279,7 @@ function buildStoreys(): StoreyInfo[] {
   for (let i = 0; i < ids.size(); i++) {
     const line = api.GetLine(modelId, ids.get(i), false) as Record<string, unknown>
     if (!line) continue
-    storeys.push({ name: safeStr(line.Name), elevation: numOf(line.Elevation) })
+    storeys.push({ id: ids.get(i), name: safeStr(line.Name), elevation: numOf(line.Elevation) })
   }
   storeys.sort((a, b) => (a.elevation ?? 0) - (b.elevation ?? 0))
   return storeys
@@ -441,151 +459,6 @@ function buildGeoreference(schema: string): GeoReference | null {
   return { crs, mapConversion, sitePosition, projectedPosition, trueNorth }
 }
 
-/* ---------- Code STEP source du géoréférencement ---------- */
-
-/** Une ligne STEP brute (#id=ENTITY(...)) retrouvée par son expressID. */
-function findStepLine(text: string, id: number): string | null {
-  const needle = new RegExp(`#${id}\\s*=`, 'g')
-  let m: RegExpExecArray | null
-  while ((m = needle.exec(text))) {
-    // Doit être en début de ligne (sinon c'est une référence ou du texte).
-    let k = m.index - 1
-    while (k >= 0 && (text[k] === ' ' || text[k] === '\t')) k--
-    if (k >= 0 && text[k] !== '\n' && text[k] !== '\r') continue
-    let inStr = false
-    for (let i = m.index; i < text.length; i++) {
-      const c = text[i]
-      if (c === "'") inStr = !inStr
-      else if (c === ';' && !inStr) return text.slice(m.index, i + 1).replace(/\s*[\r\n]+\s*/g, ' ')
-    }
-    return null
-  }
-  return null
-}
-
-/** Découpe « #id=ENTITY(a,b,(c,d),'e');» en arguments de premier niveau. */
-function splitStepLine(line: string): { head: string; args: string[] } | null {
-  const open = line.indexOf('(')
-  const close = line.lastIndexOf(')')
-  if (open < 0 || close < open) return null
-  const body = line.slice(open + 1, close)
-  const args: string[] = []
-  let depth = 0
-  let inStr = false
-  let start = 0
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i]
-    if (c === "'") inStr = !inStr
-    else if (inStr) continue
-    else if (c === '(') depth++
-    else if (c === ')') depth--
-    else if (c === ',' && depth === 0) {
-      args.push(body.slice(start, i))
-      start = i + 1
-    }
-  }
-  args.push(body.slice(start))
-  return { head: line.slice(0, open), args }
-}
-
-function refId(raw: unknown): number | null {
-  const r = raw as Record<string, unknown> | undefined
-  return r && typeof r.value === 'number' ? (r.value as number) : null
-}
-
-/**
- * Lignes du fichier IFC qui portent la géolocalisation et le géoréférencement,
- * avec, pour chaque argument concerné, la clé de la valeur affichée dans
- * l'onglet Infos projet — l'interface s'en sert pour colorer ces valeurs.
- */
-function buildGeoCode(buffer: ArrayBuffer): GeoCodeGroup[] {
-  if (!api) return []
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buffer))
-  const groups: GeoCodeGroup[] = []
-  const seen = new Set<number>()
-
-  const line = (id: number | null, keys: Record<number, string>, note: string): GeoCodeLine | null => {
-    if (id === null || seen.has(id)) return null
-    const raw = findStepLine(text, id)
-    const parts = raw ? splitStepLine(raw) : null
-    if (!parts) return null
-    seen.add(id)
-    return { id, head: parts.head, args: parts.args.map((t, i) => ({ text: t, key: keys[i] })), note }
-  }
-  const push = (title: string, lines: (GeoCodeLine | null)[]) => {
-    const ok = lines.filter((l): l is GeoCodeLine => l !== null)
-    if (ok.length) groups.push({ title, lines: ok })
-  }
-
-  const first = (type: number) => {
-    const ids = api!.GetLineIDsWithType(modelId, type)
-    return ids.size() > 0 ? ids.get(0) : null
-  }
-
-  // Géolocalisation : IfcSite (RefLatitude, RefLongitude, RefElevation = 10e à 12e arguments).
-  const siteId = first(WebIFC.IFCSITE)
-  const site = siteId !== null ? (api.GetLine(modelId, siteId, false) as Record<string, unknown>) : null
-  push('Géolocalisation — IfcSite', [
-    line(siteId, { 9: 'geo.latitude', 10: 'geo.longitude', 11: 'geo.elevation', 5: 'site.position' }, 'Site : latitude, longitude, altitude de référence'),
-  ])
-
-  // Système de coordonnées et conversion (IFC4+).
-  let mcId: number | null = null
-  let crsId: number | null = null
-  try { mcId = first(WebIFC.IFCMAPCONVERSION) } catch { /* schéma sans l'entité */ }
-  if (mcId !== null) {
-    crsId = refId((api.GetLine(modelId, mcId, false) as Record<string, unknown>).TargetCRS)
-  } else {
-    try { crsId = first(WebIFC.IFCPROJECTEDCRS) } catch { /* idem */ }
-  }
-  const crs = crsId !== null ? (api.GetLine(modelId, crsId, false) as Record<string, unknown>) : null
-  const unitId = crs ? refId(crs.MapUnit) : null
-  push('Système de coordonnées — IfcProjectedCRS', [
-    line(crsId, {
-      0: 'crs.name', 1: 'crs.description', 2: 'crs.geodeticDatum', 3: 'crs.verticalDatum',
-      4: 'crs.mapProjection', 5: 'crs.mapZone', 6: 'crs.mapUnit',
-    }, 'Nom, description, datum géodésique, datum vertical, projection, zone, unité'),
-    line(unitId, { 2: 'crs.mapUnit', 3: 'crs.mapUnit' }, 'Unité du système de coordonnées'),
-  ])
-  push('Conversion — IfcMapConversion', [
-    line(mcId, {
-      2: 'mc.eastings', 3: 'mc.northings', 4: 'mc.orthogonalHeight',
-      5: 'mc.rotation', 6: 'mc.rotation', 7: 'mc.scale',
-    }, 'Eastings, Northings, OrthogonalHeight, XAxisAbscissa, XAxisOrdinate, Scale'),
-  ])
-
-  // Position du site : chaîne IfcLocalPlacement → IfcAxis2Placement3D → IfcCartesianPoint.
-  const chain: (GeoCodeLine | null)[] = []
-  let plId = site ? refId(site.ObjectPlacement) : null
-  for (let depth = 0; plId !== null && depth < 32; depth++) {
-    const pl = api.GetLine(modelId, plId, false) as Record<string, unknown>
-    chain.push(line(plId, {}, depth === 0 ? 'Placement du site' : 'Placement parent'))
-    const axId = refId(pl.RelativePlacement)
-    if (axId !== null) {
-      const ax = api.GetLine(modelId, axId, false) as Record<string, unknown>
-      chain.push(line(axId, {}, 'Repère : origine, axe Z, direction X'))
-      chain.push(line(refId(ax.Location), { 0: 'site.position' }, 'Origine du site (X, Y, Z)'))
-      chain.push(line(refId(ax.RefDirection), { 0: 'site.orientation' }, 'Orientation (direction X)'))
-    }
-    plId = refId(pl.PlacementRelTo)
-  }
-  push('Position du site — IfcLocalPlacement', chain)
-
-  // Nord vrai : IfcGeometricRepresentationContext.TrueNorth (6e argument).
-  const ctxIds = api.GetLineIDsWithType(modelId, WebIFC.IFCGEOMETRICREPRESENTATIONCONTEXT)
-  for (let i = 0; i < ctxIds.size(); i++) {
-    const ctx = api.GetLine(modelId, ctxIds.get(i), false) as Record<string, unknown>
-    if (!ctx?.TrueNorth) continue
-    push('Nord vrai — IfcGeometricRepresentationContext', [
-      line(ctxIds.get(i), { 5: 'trueNorth' }, 'Contexte géométrique du modèle'),
-      line(refId(ctx.TrueNorth), { 0: 'trueNorth' }, 'Direction du Nord vrai'),
-    ])
-    break
-  }
-
-  return groups
-}
-
 function buildOwnerHistory(): OwnerHistoryInfo | null {
   if (!api) return null
   const ids = api.GetLineIDsWithType(modelId, WebIFC.IFCOWNERHISTORY)
@@ -640,7 +513,7 @@ function buildUnits(): UnitInfo[] {
     const name = safeStr(line.Name) ?? ''
     const prefix = safeStr(line.Prefix)
     const symbol = (prefix ? SI_PREFIX_SYMBOL[prefix] ?? prefix : '') + (SI_UNIT_SYMBOL[name] ?? name.toLowerCase())
-    units.push({ unitType, label: `${UNIT_TYPE_LABEL[unitType] ?? unitType} : ${symbol}` })
+    units.push({ id: siIds.get(i), unitType, label: `${UNIT_TYPE_LABEL[unitType] ?? unitType} : ${symbol}` })
   }
 
   const cbIds = api.GetLineIDsWithType(modelId, WebIFC.IFCCONVERSIONBASEDUNIT)
@@ -649,7 +522,7 @@ function buildUnits(): UnitInfo[] {
     if (!line) continue
     const unitType = safeStr(line.UnitType) ?? 'USERDEFINED'
     const name = safeStr(line.Name) ?? ''
-    units.push({ unitType, label: `${UNIT_TYPE_LABEL[unitType] ?? unitType} : ${name}` })
+    units.push({ id: cbIds.get(i), unitType, label: `${UNIT_TYPE_LABEL[unitType] ?? unitType} : ${name}` })
   }
 
   const monIds = api.GetLineIDsWithType(modelId, WebIFC.IFCMONETARYUNIT)
@@ -657,14 +530,25 @@ function buildUnits(): UnitInfo[] {
     const line = api.GetLine(modelId, monIds.get(i), false) as Record<string, unknown>
     if (!line) continue
     const currency = safeStr(line.Currency) ?? 'Devise'
-    units.push({ unitType: 'MONETARYUNIT', label: `${UNIT_TYPE_LABEL.MONETARYUNIT} : ${currency}` })
+    units.push({ id: monIds.get(i), unitType: 'MONETARYUNIT', label: `${UNIT_TYPE_LABEL.MONETARYUNIT} : ${currency}` })
   }
 
   return units
 }
 
 function buildProjectInfo(buffer: ArrayBuffer, schema: string): ProjectInfo {
+  const firstId = (type: number): number | null => {
+    if (!api) return null
+    const ids = api.GetLineIDsWithType(modelId, type)
+    return ids.size() > 0 ? ids.get(0) : null
+  }
   const info: ProjectInfo = {
+    ids: {
+      project: firstId(WebIFC.IFCPROJECT),
+      site: firstId(WebIFC.IFCSITE),
+      building: firstId(WebIFC.IFCBUILDING),
+      ownerHistory: firstId(WebIFC.IFCOWNERHISTORY),
+    },
     schema,
     mvd: extractMvd(buffer),
     projectName: null,
@@ -676,7 +560,6 @@ function buildProjectInfo(buffer: ArrayBuffer, schema: string): ProjectInfo {
     storeys: buildStoreys(),
     georeference: buildGeoreference(schema),
     geolocation: buildGeolocation(),
-    geoCode: buildGeoCode(buffer),
     ownerHistory: buildOwnerHistory(),
     units: buildUnits(),
   }
@@ -720,8 +603,9 @@ async function loadFile(buffer: ArrayBuffer) {
 
   post({ type: 'progress', percent: 15, phase: 'Chargement du fichier…' })
 
+  fileBytes = new Uint8Array(buffer)
   try {
-    modelId = api.OpenModel(new Uint8Array(buffer), { COORDINATE_TO_ORIGIN: false })
+    modelId = api.OpenModel(fileBytes, { COORDINATE_TO_ORIGIN: false })
   } catch (e) {
     post({ type: 'error', message: `Erreur de chargement: ${e}` })
     return
@@ -730,6 +614,7 @@ async function loadFile(buffer: ArrayBuffer) {
   typeCodeMap.clear()
   entityPsetMap.clear()
   storeyCache.clear()
+  lineIndex.clear()
   aggregationCache.clear()
   outRels.clear()
   inRels.clear()
@@ -746,6 +631,9 @@ async function loadFile(buffer: ArrayBuffer) {
     else if (header?.includes('IFC4')) ifcVersion = 'IFC4'
     else ifcVersion = 'IFC2X3'
   } catch { ifcVersion = 'IFC2X3' }
+
+  post({ type: 'progress', percent: 22, phase: 'Index des lignes du fichier…' })
+  buildLineIndex()
 
   post({ type: 'progress', percent: 25, phase: 'Index des niveaux…' })
   buildStoreyCache()
@@ -1055,6 +943,7 @@ async function selectEntityType(entityType: string) {
 /* ==================== Vue graphe (v2) ==================== */
 
 interface RawRel {
+  relId: number
   relType: GraphRelType
   relGlobalId: string | null
   relatingId: number
@@ -1175,9 +1064,10 @@ function buildRelationIndex(relTypes: GraphRelType[]) {
     }
 
     for (let i = 0; i < lineIds.size(); i++) {
+      const relId = lineIds.get(i)
       let rel: Record<string, unknown>
       try {
-        rel = api.GetLine(modelId, lineIds.get(i), false) as Record<string, unknown>
+        rel = api.GetLine(modelId, relId, false) as Record<string, unknown>
       } catch { continue }
       if (!rel) continue
 
@@ -1190,7 +1080,7 @@ function buildRelationIndex(relTypes: GraphRelType[]) {
       for (const relatingId of relatingIds) {
         const relatingType = getEntityType(relatingId)
         for (const relatedId of relatedIds) {
-          const raw: RawRel = { relType, relGlobalId, relatingId, relatedId }
+          const raw: RawRel = { relId, relType, relGlobalId, relatingId, relatedId }
           pushRel(outRels, relatingId, raw)
           pushRel(inRels, relatedId, raw)
 
@@ -1518,6 +1408,614 @@ function graphOverview() {
   post({ type: 'graphOverviewData', payload: { nodes, edges } })
 }
 
+/* ==================== Inspecteur IFC ==================== */
+
+/**
+ * Index « expressId → position dans le fichier » construit en un seul passage
+ * sur les octets. Une ligne STEP commence par `#id=` en début de ligne ; son
+ * texte n'est décodé qu'à la demande, pour ne pas garder 2× le fichier en
+ * mémoire sous forme de chaîne.
+ */
+function buildLineIndex() {
+  lineIndex.clear()
+  if (!fileBytes) return
+  const b = fileBytes
+  const n = b.length
+  let i = 0
+  while (i < n) {
+    // Début de ligne : saute les blancs puis attend '#'.
+    while (i < n && (b[i] === 32 || b[i] === 9 || b[i] === 13 || b[i] === 10)) i++
+    if (i < n && b[i] === 35) {
+      let j = i + 1
+      let id = 0
+      let digits = 0
+      while (j < n && b[j] >= 48 && b[j] <= 57) { id = id * 10 + (b[j] - 48); j++; digits++ }
+      while (j < n && (b[j] === 32 || b[j] === 9)) j++
+      if (digits > 0 && b[j] === 61) lineIndex.set(id, i)
+    }
+    // Avance jusqu'à la fin de l'instruction (';' hors chaîne), puis à la ligne suivante.
+    let inStr = false
+    while (i < n) {
+      const c = b[i]
+      if (c === 39) inStr = !inStr
+      else if (c === 59 && !inStr) { i++; break }
+      i++
+    }
+  }
+}
+
+const decoder = new TextDecoder('utf-8', { fatal: false })
+
+/** Texte brut d'une instruction STEP, de `#id=` au `;` inclus, sur une seule ligne. */
+function rawLine(id: number): string | null {
+  if (!fileBytes) return null
+  const start = lineIndex.get(id)
+  if (start === undefined) return null
+  const b = fileBytes
+  let inStr = false
+  let i = start
+  while (i < b.length) {
+    const c = b[i]
+    if (c === 39) inStr = !inStr
+    else if (c === 59 && !inStr) break
+    i++
+  }
+  return decoder.decode(b.subarray(start, i + 1)).replace(/\s*[\r\n]+\s*/g, ' ')
+}
+
+/** Lignes d'en-tête (FILE_DESCRIPTION, FILE_NAME, FILE_SCHEMA), hors section DATA. */
+function rawHeaderLine(name: string): string | null {
+  if (!fileBytes) return null
+  const head = decoder.decode(fileBytes.subarray(0, Math.min(fileBytes.length, 8192)))
+  const m = head.match(new RegExp(`${name}\\s*\\(([\\s\\S]*?)\\)\\s*;`))
+  return m ? `${name}(${m[1]});`.replace(/\s*[\r\n]+\s*/g, ' ') : null
+}
+
+/** Découpe « #id=ENTITY(a,b,(c,d),'e');» en en-tête et arguments de premier niveau. */
+function splitStepLine(line: string): { head: string; args: string[] } | null {
+  const open = line.indexOf('(')
+  const close = line.lastIndexOf(')')
+  if (open < 0 || close < open) return null
+  const body = line.slice(open + 1, close)
+  const args: string[] = []
+  let depth = 0
+  let inStr = false
+  let start = 0
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]
+    if (c === "'") inStr = !inStr
+    else if (inStr) continue
+    else if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (c === ',' && depth === 0) {
+      args.push(body.slice(start, i))
+      start = i + 1
+    }
+  }
+  args.push(body.slice(start))
+  return { head: line.slice(0, open), args }
+}
+
+function refsIn(text: string): number[] | undefined {
+  if (text.includes("'")) return undefined
+  const out: number[] = []
+  const re = /#(\d+)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text))) out.push(Number(m[1]))
+  return out.length ? out : undefined
+}
+
+/** Noms d'attributs dans l'ordre STEP, tels que web-ifc les expose (y compris les dérivés `*`). */
+function attrNames(id: number): string[] {
+  if (!api) return []
+  try {
+    const line = api.GetLine(modelId, id, false) as Record<string, unknown>
+    return Object.keys(line).filter((k) => k !== 'expressID' && k !== 'type')
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Construit une ligne de l'inspecteur : texte brut découpé, nom de chaque
+ * attribut, références cliquables et clés de mise en évidence (`keys` :
+ * nom d'attribut → clé).
+ */
+function inspectLine(id: number, opts: { note?: string; keys?: Record<string, string> } = {}): InspectLine | null {
+  const raw = rawLine(id)
+  const parts = raw ? splitStepLine(raw) : null
+  if (!parts) return null
+  const names = attrNames(id)
+  const eq = parts.head.indexOf('=')
+  const typeName = parts.head.slice(eq + 1).trim()
+  const args: InspectArg[] = parts.args.map((text, i) => {
+    const name = names[i]
+    const key = name && opts.keys ? opts.keys[name] : undefined
+    const refs = refsIn(text)
+    const a: InspectArg = { text }
+    if (name) a.name = name
+    if (refs) a.refs = refs
+    if (key) a.key = key
+    return a
+  })
+  return { id, typeName, args, note: opts.note }
+}
+
+function headerLine(name: string, keys: Record<number, string> = {}, note?: string): InspectLine | null {
+  const raw = rawHeaderLine(name)
+  const parts = raw ? splitStepLine(raw) : null
+  if (!parts) return null
+  return {
+    id: 0,
+    typeName: name,
+    note,
+    args: parts.args.map((text, i) => (keys[i] ? { text, key: keys[i] } : { text })),
+  }
+}
+
+function groupOf(title: string, lines: (InspectLine | null)[]): InspectGroup | null {
+  const ok = lines.filter((l): l is InspectLine => l !== null)
+  return ok.length ? { title, lines: ok } : null
+}
+
+function compact(groups: (InspectGroup | null)[]): InspectGroup[] {
+  return groups.filter((g): g is InspectGroup => g !== null)
+}
+
+function firstId(type: number): number | null {
+  if (!api) return null
+  try {
+    const ids = api.GetLineIDsWithType(modelId, type)
+    return ids.size() > 0 ? ids.get(0) : null
+  } catch {
+    return null
+  }
+}
+
+function lineOf(id: number | null): Record<string, unknown> | null {
+  if (!api || id === null) return null
+  try {
+    return api.GetLine(modelId, id, false) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function refId(raw: unknown): number | null {
+  const r = raw as Record<string, unknown> | undefined
+  return r && typeof r.value === 'number' ? (r.value as number) : null
+}
+
+function typeNameOf(id: number): string {
+  return getEntityType(id) ?? 'Inconnu'
+}
+
+/** Chaîne [#a, #b, #c] rendue en un groupe, avec mise en évidence d'un attribut. */
+function chainGroups(ids: number[], focusId?: number, focusAttr?: string, title = 'Lignes liées'): InspectGroup[] {
+  const seen = new Set<number>()
+  const lines = ids
+    .filter((id) => (seen.has(id) ? false : (seen.add(id), true)))
+    .map((id) => inspectLine(id, id === focusId && focusAttr ? { keys: { [focusAttr]: 'focus' } } : {}))
+  return compact([groupOf(title, lines)])
+}
+
+/* ---- Géolocalisation / géoréférencement ---- */
+
+function geoGroups(): InspectGroup[] {
+  const siteId = firstId(WebIFC.IFCSITE)
+  const site = lineOf(siteId)
+
+  const groups: (InspectGroup | null)[] = []
+  groups.push(groupOf('Géolocalisation — IfcSite', [
+    siteId === null ? null : inspectLine(siteId, {
+      note: 'Site : latitude, longitude, altitude de référence',
+      keys: { RefLatitude: 'geo.latitude', RefLongitude: 'geo.longitude', RefElevation: 'geo.elevation', ObjectPlacement: 'site.position' },
+    }),
+  ]))
+
+  let mcId: number | null = null
+  let crsId: number | null = null
+  try { mcId = firstId(WebIFC.IFCMAPCONVERSION) } catch { /* schéma sans l'entité */ }
+  if (mcId !== null) crsId = refId(lineOf(mcId)!.TargetCRS)
+  else { try { crsId = firstId(WebIFC.IFCPROJECTEDCRS) } catch { /* idem */ } }
+  const crs = lineOf(crsId)
+  const unitId = crs ? refId(crs.MapUnit) : null
+  groups.push(groupOf('Système de coordonnées — IfcProjectedCRS', [
+    crsId === null ? null : inspectLine(crsId, {
+      note: 'Nom, description, datum géodésique, datum vertical, projection, zone, unité',
+      keys: {
+        Name: 'crs.name', Description: 'crs.description', GeodeticDatum: 'crs.geodeticDatum',
+        VerticalDatum: 'crs.verticalDatum', MapProjection: 'crs.mapProjection', MapZone: 'crs.mapZone', MapUnit: 'crs.mapUnit',
+      },
+    }),
+    unitId === null ? null : inspectLine(unitId, { note: 'Unité du système de coordonnées', keys: { Prefix: 'crs.mapUnit', Name: 'crs.mapUnit' } }),
+  ]))
+  groups.push(groupOf('Conversion — IfcMapConversion', [
+    mcId === null ? null : inspectLine(mcId, {
+      note: 'Eastings, Northings, OrthogonalHeight, XAxisAbscissa, XAxisOrdinate, Scale',
+      keys: {
+        Eastings: 'mc.eastings', Northings: 'mc.northings', OrthogonalHeight: 'mc.orthogonalHeight',
+        XAxisAbscissa: 'mc.rotation', XAxisOrdinate: 'mc.rotation', Scale: 'mc.scale',
+      },
+    }),
+  ]))
+
+  const chain: (InspectLine | null)[] = []
+  let plId = site ? refId(site.ObjectPlacement) : null
+  for (let depth = 0; plId !== null && depth < 32; depth++) {
+    const pl = lineOf(plId)
+    if (!pl) break
+    chain.push(inspectLine(plId, { note: depth === 0 ? 'Placement du site' : 'Placement parent' }))
+    const axId = refId(pl.RelativePlacement)
+    const ax = lineOf(axId)
+    if (ax) {
+      chain.push(inspectLine(axId!, { note: 'Repère : origine, axe Z, direction X' }))
+      const loc = refId(ax.Location)
+      const dir = refId(ax.RefDirection)
+      if (loc !== null) chain.push(inspectLine(loc, { note: 'Origine du site (X, Y, Z)', keys: { Coordinates: 'site.position' } }))
+      if (dir !== null) chain.push(inspectLine(dir, { note: 'Orientation (direction X)', keys: { DirectionRatios: 'site.orientation' } }))
+    }
+    plId = refId(pl.PlacementRelTo)
+  }
+  groups.push(groupOf('Position du site — IfcLocalPlacement', chain))
+
+  const ctxIds = api!.GetLineIDsWithType(modelId, WebIFC.IFCGEOMETRICREPRESENTATIONCONTEXT)
+  for (let i = 0; i < ctxIds.size(); i++) {
+    const ctx = lineOf(ctxIds.get(i))
+    if (!ctx?.TrueNorth) continue
+    const tn = refId(ctx.TrueNorth)
+    groups.push(groupOf('Nord vrai — IfcGeometricRepresentationContext', [
+      inspectLine(ctxIds.get(i), { note: 'Contexte géométrique du modèle', keys: { TrueNorth: 'trueNorth' } }),
+      tn === null ? null : inspectLine(tn, { note: 'Direction du Nord vrai', keys: { DirectionRatios: 'trueNorth' } }),
+    ]))
+    break
+  }
+  return compact(groups)
+}
+
+/* ---- Champs de l'onglet Infos projet ---- */
+
+const PROJECT_FIELD_LABEL: Record<string, string> = {
+  'project.Name': 'Nom du projet',
+  'project.LongName': 'Désignation du projet',
+  'project.Phase': 'Phase',
+  'project.Description': 'Description du projet',
+  'building.Name': 'Bâtiment',
+  'site.Name': 'Nom du site',
+  'site.Address': 'Adresse du site',
+  schema: 'Schéma IFC',
+  mvd: 'MVD (Model View Definition)',
+  'owner.application': 'Application',
+  'owner.version': 'Version de l’application',
+  'owner.developer': 'Éditeur',
+  'owner.person': 'Auteur',
+  'owner.organization': 'Organisation',
+  'owner.creationDate': 'Date de création',
+  'owner.lastModifiedDate': 'Date de modification',
+  storey: 'Étage',
+  unit: 'Unité',
+}
+
+function projectFieldResult(field: string, id: number | undefined): Omit<InspectResult, 'request'> {
+  const title = PROJECT_FIELD_LABEL[field] ?? field
+  const family: InspectFamily = 'project'
+
+  if (field === 'schema' || field === 'mvd') {
+    return {
+      family, title,
+      subtitle: 'En-tête STEP du fichier (section HEADER)',
+      focusKey: 'focus',
+      groups: compact([groupOf('En-tête du fichier', [
+        headerLine('FILE_DESCRIPTION', field === 'mvd' ? { 0: 'focus' } : {}, 'Description : MVD, niveau d’implémentation'),
+        headerLine('FILE_NAME', {}, 'Nom, horodatage, auteur, organisation, préprocesseur, logiciel d’origine'),
+        headerLine('FILE_SCHEMA', field === 'schema' ? { 0: 'focus' } : {}, 'Schéma IFC déclaré'),
+      ])]),
+    }
+  }
+
+  const [scope, attr] = field.split('.')
+  if (scope === 'project' || scope === 'building' || scope === 'site') {
+    const type = scope === 'project' ? WebIFC.IFCPROJECT : scope === 'building' ? WebIFC.IFCBUILDING : WebIFC.IFCSITE
+    const eid = firstId(type)
+    if (eid === null) return { family, title, groups: [] }
+    if (attr === 'Address') {
+      const line = lineOf(eid)
+      const addrId = line ? refId(line.SiteAddress ?? line.BuildingAddress) : null
+      return {
+        family, title, focusKey: 'focus',
+        groups: compact([groupOf('Adresse', [
+          inspectLine(eid, { keys: { SiteAddress: 'ref', BuildingAddress: 'ref' } }),
+          addrId === null ? null : inspectLine(addrId, { note: 'Adresse postale', keys: { AddressLines: 'focus', Town: 'focus', Region: 'focus', PostalCode: 'focus', Country: 'focus' } }),
+        ])]),
+      }
+    }
+    return { family, title, focusKey: 'focus', groups: chainGroups([eid], eid, attr, 'Entité') }
+  }
+
+  if (scope === 'owner') {
+    const ohId = firstId(WebIFC.IFCOWNERHISTORY)
+    const oh = lineOf(ohId)
+    if (!oh || ohId === null) return { family, title, groups: [] }
+    const puId = refId(oh.OwningUser)
+    const pu = lineOf(puId)
+    const personId = pu ? refId(pu.ThePerson) : null
+    const orgId = pu ? refId(pu.TheOrganization) : null
+    const appId = refId(oh.OwningApplication)
+    const app = lineOf(appId)
+    const devId = app ? refId(app.ApplicationDeveloper) : null
+    const k = (cond: boolean, keys: Record<string, string>) => (cond ? keys : {})
+    return {
+      family, title, focusKey: 'focus',
+      groups: compact([
+        groupOf('Historique — IfcOwnerHistory', [
+          inspectLine(ohId, {
+            note: 'Utilisateur, application, état, action, dates',
+            keys: { ...k(attr === 'creationDate', { CreationDate: 'focus' }), ...k(attr === 'lastModifiedDate', { LastModifiedDate: 'focus' }) },
+          }),
+        ]),
+        groupOf('Auteur — IfcPersonAndOrganization', [
+          puId === null ? null : inspectLine(puId, { note: 'Personne + organisation' }),
+          personId === null ? null : inspectLine(personId, { note: 'Personne', keys: k(attr === 'person', { FamilyName: 'focus', GivenName: 'focus' }) }),
+          orgId === null ? null : inspectLine(orgId, { note: 'Organisation', keys: k(attr === 'organization', { Name: 'focus' }) }),
+        ]),
+        groupOf('Logiciel — IfcApplication', [
+          appId === null ? null : inspectLine(appId, {
+            note: 'Éditeur, version, nom complet, identifiant',
+            keys: { ...k(attr === 'application', { ApplicationFullName: 'focus', ApplicationIdentifier: 'focus' }), ...k(attr === 'version', { Version: 'focus' }) },
+          }),
+          devId === null ? null : inspectLine(devId, { note: 'Éditeur', keys: k(attr === 'developer', { Name: 'focus' }) }),
+        ]),
+      ]),
+    }
+  }
+
+  if ((scope === 'storey' || scope === 'unit') && id !== undefined) {
+    const keys: Record<string, string> = scope === 'storey' ? { Name: 'focus', Elevation: 'focus' } : { UnitType: 'focus', Prefix: 'focus', Name: 'focus', ConversionFactor: 'focus', Currency: 'focus' }
+    const line = lineOf(id)
+    const extra: (InspectLine | null)[] = []
+    if (scope === 'unit' && line) {
+      const cf = refId(line.ConversionFactor)
+      const cfLine = lineOf(cf)
+      if (cf !== null) extra.push(inspectLine(cf, { note: 'Facteur de conversion (valeur, unité SI)' }))
+      const base = cfLine ? refId(cfLine.UnitComponent) : null
+      if (base !== null) extra.push(inspectLine(base, { note: 'Unité SI de référence' }))
+    }
+    return {
+      family, title: `${title} — ${safeStr(line?.Name) ?? `#${id}`}`, focusKey: 'focus',
+      groups: compact([groupOf(scope === 'storey' ? 'Étage — IfcBuildingStorey' : 'Unité', [inspectLine(id, { keys }), ...extra])]),
+    }
+  }
+
+  return { family, title, groups: [] }
+}
+
+/* ---- Attributs et propriétés agrégés ---- */
+
+const OCCURRENCE_CAP = 300
+
+function occurrenceLabel(line: Record<string, unknown> | null): string | null {
+  if (!line) return null
+  return safeStr(line.Name) ?? safeStr(line.GlobalId)
+}
+
+function attributeResult(entityType: string, attr: string, value?: string): Omit<InspectResult, 'request'> {
+  const typeCode = typeCodeMap.get(entityType)
+  const items: InspectOccurrence[] = []
+  let total = 0
+  if (api && typeCode !== undefined) {
+    const ids = api.GetLineIDsWithType(modelId, typeCode)
+    for (let i = 0; i < ids.size(); i++) {
+      const id = ids.get(i)
+      const line = lineOf(id)
+      if (!line) continue
+      const v = valueToString(line[attr])
+      if (v === null || v === '') continue
+      const str = String(v)
+      if (value !== undefined && str !== value) continue
+      total++
+      if (items.length < OCCURRENCE_CAP) {
+        items.push({ id, typeName: entityType, label: occurrenceLabel(line), value: str, chain: [id], focusId: id, focusAttr: attr })
+      }
+    }
+  }
+  const first = items[0]
+  return {
+    family: 'attribute',
+    title: `${entityType} · ${attr}${value !== undefined ? ` = ${value}` : ''}`,
+    subtitle: `${total.toLocaleString('fr-FR')} occurrence${total > 1 ? 's' : ''} portant cet attribut`,
+    focusKey: 'focus',
+    groups: first ? chainGroups(first.chain, first.focusId, first.focusAttr, 'Première occurrence') : [],
+    occurrences: { total, items },
+  }
+}
+
+function propertyResult(entityType: string, psetName: string, propName?: string, value?: string): Omit<InspectResult, 'request'> {
+  const typeCode = typeCodeMap.get(entityType)
+  const items: InspectOccurrence[] = []
+  let total = 0
+  if (api && typeCode !== undefined) {
+    const ids = api.GetLineIDsWithType(modelId, typeCode)
+    for (let i = 0; i < ids.size(); i++) {
+      const id = ids.get(i)
+      const psets = entityPsetMap.get(id) ?? []
+      for (const pset of psets) {
+        if (pset.name !== psetName || pset.id === undefined) continue
+        if (propName === undefined) {
+          total++
+          if (items.length < OCCURRENCE_CAP) {
+            items.push({
+              id, typeName: entityType, label: occurrenceLabel(lineOf(id)), value: null,
+              chain: [id, ...(pset.relId !== undefined ? [pset.relId] : []), pset.id], focusId: pset.id, focusAttr: 'Name',
+            })
+          }
+          continue
+        }
+        for (const prop of pset.properties) {
+          if (prop.name !== propName || prop.id === undefined) continue
+          if (prop.value === null || prop.value === '') continue
+          const str = String(prop.value)
+          if (value !== undefined && str !== value) continue
+          total++
+          if (items.length < OCCURRENCE_CAP) {
+            items.push({
+              id, typeName: entityType, label: occurrenceLabel(lineOf(id)), value: str,
+              chain: [id, ...(pset.relId !== undefined ? [pset.relId] : []), pset.id, prop.id], focusId: prop.id, focusAttr: prop.valueAttr,
+            })
+          }
+        }
+      }
+    }
+  }
+  const first = items[0]
+  return {
+    family: 'property',
+    title: `${entityType} · ${psetName}${propName ? ` · ${propName}` : ''}${value !== undefined ? ` = ${value}` : ''}`,
+    subtitle: `${total.toLocaleString('fr-FR')} occurrence${total > 1 ? 's' : ''} — élément → IfcRelDefinesByProperties → ${propName ? 'Pset → propriété' : 'Pset'}`,
+    focusKey: 'focus',
+    groups: first ? chainGroups(first.chain, first.focusId, first.focusAttr, 'Première occurrence') : [],
+    occurrences: { total, items },
+  }
+}
+
+/* ---- Graphe ---- */
+
+function memberIdsOf(nodeId: string | undefined, entityType: string): number[] {
+  if (nodeId?.startsWith('e')) return [Number(nodeId.slice(1))]
+  if (nodeId && groupMembers.has(nodeId)) return groupMembers.get(nodeId)!
+  const typeCode = typeCodeMap.get(entityType)
+  if (!api || typeCode === undefined) return []
+  const ids = api.GetLineIDsWithType(modelId, typeCode)
+  const out: number[] = []
+  for (let i = 0; i < ids.size(); i++) out.push(ids.get(i))
+  return out
+}
+
+function instancesResult(entityType: string, nodeId?: string): Omit<InspectResult, 'request'> {
+  const ids = memberIdsOf(nodeId, entityType)
+  const items: InspectOccurrence[] = ids.slice(0, OCCURRENCE_CAP).map((id) => ({
+    id, typeName: typeNameOf(id), label: occurrenceLabel(lineOf(id)), value: null, chain: [id], focusId: id, focusAttr: 'Name',
+  }))
+  const first = items[0]
+  return {
+    family: 'entity',
+    title: ids.length === 1 ? `${typeNameOf(ids[0])} #${ids[0]}` : `${entityType} — ${ids.length.toLocaleString('fr-FR')} instance${ids.length > 1 ? 's' : ''}`,
+    subtitle: ids.length === 1 ? (safeStr(lineOf(ids[0])?.GlobalId) ? `GUID ${safeStr(lineOf(ids[0])?.GlobalId)}` : undefined) : undefined,
+    focusKey: 'focus',
+    groups: first ? chainGroups(first.chain, first.focusId, first.focusAttr, ids.length === 1 ? 'Entité' : 'Première instance') : [],
+    occurrences: ids.length > 1 ? { total: ids.length, items } : undefined,
+  }
+}
+
+function relationsResult(relType: GraphRelType, nodeId?: string, sourceType?: string, targetType?: string): Omit<InspectResult, 'request'> {
+  buildRelationIndex([relType])
+  const seen = new Set<number>()
+  const items: InspectOccurrence[] = []
+  let total = 0
+  const take = (r: RawRel) => {
+    if (r.relType !== relType || seen.has(r.relId)) return
+    seen.add(r.relId)
+    total++
+    if (items.length < OCCURRENCE_CAP) {
+      items.push({
+        id: r.relId, typeName: relType,
+        label: `${typeNameOf(r.relatingId)} #${r.relatingId} → ${typeNameOf(r.relatedId)} #${r.relatedId}`,
+        value: r.relGlobalId, chain: [r.relId, r.relatingId, r.relatedId], focusId: r.relId,
+      })
+    }
+  }
+  if (nodeId) {
+    const entityType = nodeId.startsWith('g:') ? nodeId.split(':').pop()! : ''
+    for (const id of memberIdsOf(nodeId, entityType)) {
+      for (const r of outRels.get(id) ?? []) take(r)
+      for (const r of inRels.get(id) ?? []) take(r)
+    }
+  } else {
+    for (const rels of outRels.values()) {
+      for (const r of rels) {
+        if (r.relType !== relType) continue
+        if (sourceType && getEntityType(r.relatingId) !== sourceType) continue
+        if (targetType && getEntityType(r.relatedId) !== targetType) continue
+        take(r)
+      }
+    }
+  }
+  const first = items[0]
+  return {
+    family: 'relation',
+    title: `${relType}${sourceType || targetType ? ` · ${sourceType ?? '…'} → ${targetType ?? '…'}` : ''}`,
+    subtitle: `${total.toLocaleString('fr-FR')} relation${total > 1 ? 's' : ''} — ligne IfcRel, puis entité relating et entité related`,
+    focusKey: 'focus',
+    groups: first ? relationGroups(first.chain, relType) : [],
+    occurrences: { total, items },
+  }
+}
+
+/** Ligne IfcRel… avec ses deux extrémités mises en évidence, puis les entités relating et related. */
+function relationGroups(chain: number[], relType: GraphRelType): InspectGroup[] {
+  const { relating, related } = REL_ATTRS[relType]
+  const [relId, relatingId, relatedId] = chain
+  return compact([
+    groupOf('Relation', [inspectLine(relId, { note: `${relating} → ${related}`, keys: { [relating]: 'focus', [related]: 'focus' } })]),
+    groupOf('Extrémités', [
+      relatingId === undefined ? null : inspectLine(relatingId, { note: `Relating (${relating})` }),
+      relatedId === undefined ? null : inspectLine(relatedId, { note: `Related (${related})` }),
+    ]),
+  ])
+}
+
+const GEO_KEY_LABEL: Record<string, string> = {
+  'geo.latitude': 'Latitude', 'geo.longitude': 'Longitude', 'geo.elevation': 'Altitude (RefElevation)',
+  'crs.name': 'Système', 'crs.description': 'Description', 'crs.geodeticDatum': 'Datum géodésique',
+  'crs.verticalDatum': 'Datum vertical', 'crs.mapProjection': 'Projection', 'crs.mapZone': 'Zone', 'crs.mapUnit': 'Unité',
+  'site.position': 'Position du site (X, Y, Z)', 'site.orientation': 'Orientation du site',
+  'mc.eastings': 'Eastings (X)', 'mc.northings': 'Northings (Y)', 'mc.orthogonalHeight': 'Hauteur orthogonale (Z)',
+  'mc.rotation': 'Rotation', 'mc.scale': 'Échelle', trueNorth: 'Nord vrai',
+}
+
+function inspect(request: InspectRequest): InspectResult {
+  if (!api || modelId < 0) return { request, family: 'entity', title: 'Aucun fichier chargé', groups: [] }
+  switch (request.kind) {
+    case 'geo':
+      return {
+        request,
+        family: request.key.startsWith('geo.') ? 'geolocation' : 'georeference',
+        title: GEO_KEY_LABEL[request.key] ?? request.key,
+        subtitle: 'Géolocalisation (IfcSite) et géoréférencement (CRS, conversion, placement, Nord vrai)',
+        focusKey: request.key,
+        groups: geoGroups(),
+      }
+    case 'project':
+      return { request, ...projectFieldResult(request.field, request.id) }
+    case 'entity': {
+      const line = lineOf(request.id)
+      return {
+        request, family: 'entity',
+        title: `${typeNameOf(request.id)} #${request.id}`,
+        subtitle: safeStr(line?.Name) ?? safeStr(line?.GlobalId) ?? undefined,
+        focusKey: 'focus',
+        groups: chainGroups([request.id], request.id, request.focusAttr, 'Entité'),
+      }
+    }
+    case 'chain': {
+      const relType = GRAPH_REL_TYPES.find((t) => t === typeNameOf(request.ids[0]))
+      return {
+        request, family: relType ? 'relation' : 'entity',
+        title: request.ids.map((id) => `#${id}`).join(' → '),
+        focusKey: 'focus',
+        groups: relType ? relationGroups(request.ids, relType) : chainGroups(request.ids, request.focusId, request.focusAttr),
+      }
+    }
+    case 'attribute':
+      return { request, ...attributeResult(request.entityType, request.attr, request.value) }
+    case 'property':
+      return { request, ...propertyResult(request.entityType, request.pset, request.prop, request.value) }
+    case 'instances':
+      return { request, ...instancesResult(request.entityType, request.nodeId) }
+    case 'relations':
+      return { request, ...relationsResult(request.relType, request.nodeId, request.sourceType, request.targetType) }
+  }
+}
+
 self.onmessage = async (e: MessageEvent<WorkerInMessage>) => {
   const msg = e.data
   try {
@@ -1535,6 +2033,8 @@ self.onmessage = async (e: MessageEvent<WorkerInMessage>) => {
       graphExpand(msg.nodeId, msg.relTypes)
     } else if (msg.type === 'graphOverview') {
       graphOverview()
+    } else if (msg.type === 'inspect') {
+      post({ type: 'inspectResult', result: inspect(msg.request), token: msg.token })
     }
   } catch (err) {
     post({ type: 'error', message: String(err) })

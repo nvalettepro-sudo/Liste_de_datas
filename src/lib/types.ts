@@ -2,12 +2,20 @@ export interface PropertyEntry {
   name: string
   value: string | number | boolean | null
   unit?: string
+  /** expressId de l'IfcProperty / IfcPhysicalQuantity, pour l'inspecteur. */
+  id?: number
+  /** Attribut STEP qui porte la valeur (NominalValue, LengthValue…). */
+  valueAttr?: string
 }
 
 export interface PsetData {
   name: string
   isStandard: boolean
   properties: PropertyEntry[]
+  /** expressId de l'IfcPropertySet / IfcElementQuantity. */
+  id?: number
+  /** expressId de l'IfcRelDefinesByProperties qui le rattache. */
+  relId?: number
 }
 
 export interface IfcEntity {
@@ -167,12 +175,14 @@ export interface TypeGraphPayload {
 /* ---------- Informations projet / site ---------- */
 
 export interface UnitInfo {
+  id: number
   /** Valeur de IfcUnitEnum (LENGTHUNIT, AREAUNIT…) ou 'MONETARYUNIT'. */
   unitType: string
   label: string
 }
 
 export interface StoreyInfo {
+  id: number
   name: string | null
   elevation: number | null
 }
@@ -226,20 +236,6 @@ export interface GeoLocation {
   elevation: number | null
 }
 
-/** Ligne STEP brute, découpée en arguments ; `key` relie un argument à une valeur de l'onglet Infos projet. */
-export interface GeoCodeLine {
-  id: number
-  /** « #70=IFCCARTESIANPOINT » */
-  head: string
-  args: { text: string; key?: string }[]
-  note: string
-}
-
-export interface GeoCodeGroup {
-  title: string
-  lines: GeoCodeLine[]
-}
-
 export interface OwnerHistoryInfo {
   creationDate: string | null
   lastModifiedDate: string | null
@@ -251,6 +247,8 @@ export interface OwnerHistoryInfo {
 }
 
 export interface ProjectInfo {
+  /** expressIds des entités porteuses, pour ouvrir leur code dans l'inspecteur. */
+  ids: { project: number | null; site: number | null; building: number | null; ownerHistory: number | null }
   schema: string
   /** Model View Definition, extrait de l'en-tête STEP (FILE_DESCRIPTION). */
   mvd: string | null
@@ -263,10 +261,84 @@ export interface ProjectInfo {
   storeys: StoreyInfo[]
   georeference: GeoReference | null
   geolocation: GeoLocation | null
-  /** Code IFC source de la géolocalisation et du géoréférencement. */
-  geoCode: GeoCodeGroup[]
   ownerHistory: OwnerHistoryInfo | null
   units: UnitInfo[]
+}
+
+/* ---------- Inspecteur IFC : pont entre l'application et le code STEP ---------- */
+
+/** Famille d'information, pour la couleur de mise en évidence et la légende. */
+export type InspectFamily =
+  | 'geolocation'
+  | 'georeference'
+  | 'project'
+  | 'attribute'
+  | 'property'
+  | 'relation'
+  | 'entity'
+
+export interface InspectArg {
+  /** Texte STEP brut de l'argument. */
+  text: string
+  /** Nom d'attribut selon le schéma, quand il est connu. */
+  name?: string
+  /** Références #N contenues dans l'argument (simple ou liste) — cliquables. */
+  refs?: number[]
+  /** Clé de mise en évidence ; `focusKey` du résultat désigne la valeur cliquée. */
+  key?: string
+}
+
+export interface InspectLine {
+  /** expressId, ou 0 pour une ligne d'en-tête (FILE_DESCRIPTION…). */
+  id: number
+  typeName: string
+  args: InspectArg[]
+  note?: string
+}
+
+export interface InspectGroup {
+  title: string
+  lines: InspectLine[]
+}
+
+/** Une occurrence dans une liste (instance, relation…), avec la chaîne de lignes à ouvrir. */
+export interface InspectOccurrence {
+  id: number
+  typeName: string
+  label: string | null
+  /** Valeur portée par cette occurrence (propriété, attribut) ; null sinon. */
+  value: string | null
+  chain: number[]
+  focusId?: number
+  focusAttr?: string
+}
+
+export type InspectRequest =
+  /** Valeur de géolocalisation / géoréférencement de l'onglet Infos projet. */
+  | { kind: 'geo'; key: string }
+  /** Champ de l'onglet Infos projet (projet, site, bâtiment, historique, MVD, étage, unité). */
+  | { kind: 'project'; field: string; id?: number }
+  /** Une ligne, avec éventuellement l'attribut à mettre en évidence. */
+  | { kind: 'entity'; id: number; focusAttr?: string }
+  /** Plusieurs lignes liées (élément → relation → Pset → propriété). */
+  | { kind: 'chain'; ids: number[]; focusId?: number; focusAttr?: string }
+  /** Attribut agrégé d'un type (Name, ObjectType…), filtré ou non sur une valeur. */
+  | { kind: 'attribute'; entityType: string; attr: string; value?: string }
+  /** Pset ou propriété agrégée d'un type, filtrée ou non sur une valeur. */
+  | { kind: 'property'; entityType: string; pset: string; prop?: string; value?: string }
+  /** Instances d'un type, ou membres d'un nœud groupé du graphe. */
+  | { kind: 'instances'; entityType: string; nodeId?: string }
+  /** Relations IFC d'un nœud du graphe (détail) ou entre deux types (vue d'ensemble). */
+  | { kind: 'relations'; relType: GraphRelType; nodeId?: string; sourceType?: string; targetType?: string }
+
+export interface InspectResult {
+  request: InspectRequest
+  family: InspectFamily
+  title: string
+  subtitle?: string
+  groups: InspectGroup[]
+  focusKey?: string
+  occurrences?: { total: number; items: InspectOccurrence[] }
 }
 
 export type WorkerInMessage =
@@ -277,11 +349,13 @@ export type WorkerInMessage =
   | { type: 'graphOpenType'; entityType: string; relTypes: GraphRelType[] }
   | { type: 'graphExpand'; nodeId: string; relTypes: GraphRelType[] }
   | { type: 'graphOverview' }
+  | { type: 'inspect'; request: InspectRequest; token: number }
 
 export type WorkerOutMessage =
   | { type: 'progress'; percent: number; phase: string }
   | { type: 'ready'; entityTypes: EntityTypeSummary[]; ifcVersion: string }
   | { type: 'projectInfo'; data: ProjectInfo }
+  | { type: 'inspectResult'; result: InspectResult; token: number }
   | { type: 'aggregated'; data: AggregatedEntityData }
   | { type: 'searchResults'; query: string; results: GlobalSearchResult[] }
   | { type: 'graphData'; payload: GraphPayload }

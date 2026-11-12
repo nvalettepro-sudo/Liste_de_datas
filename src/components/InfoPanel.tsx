@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store/useStore'
 import { IFC_FR } from '../lib/ifcTranslations'
+import { IfcLink } from './IfcLink'
+import type { InspectRequest } from '../lib/types'
 import type { AggregatedEntityData, AggregatedPset, AggregatedProperty, ValueAggregate } from '../lib/types'
 
 function CoverageBadge({ present, total }: { present: number; total: number }) {
@@ -17,7 +19,8 @@ function CoverageBadge({ present, total }: { present: number; total: number }) {
   )
 }
 
-function AggregateValue({ agg }: { agg: ValueAggregate }) {
+/** `reqFor(value)` fabrique la requête inspecteur d'une valeur ; sans valeur, toutes les occurrences. */
+function AggregateValue({ agg, reqFor }: { agg: ValueAggregate; reqFor: (value?: string) => InspectRequest }) {
   const [expanded, setExpanded] = useState(false)
 
   if (agg.kind === 'empty') {
@@ -30,9 +33,9 @@ function AggregateValue({ agg }: { agg: ValueAggregate }) {
     const max = fmt(agg.max!)
     const same = min === max
     return (
-      <span className="text-xs text-gray-300 font-mono">
+      <IfcLink request={reqFor()} className="text-xs text-gray-300 font-mono" title="Voir les occurrences dans le code IFC">
         {same ? min : `${min} … ${max}`}
-      </span>
+      </IfcLink>
     )
   }
 
@@ -50,7 +53,7 @@ function AggregateValue({ agg }: { agg: ValueAggregate }) {
           <div className="space-y-0.5">
             {visible.map((v) => (
               <div key={v.value} className="flex items-baseline gap-1.5">
-                <span className="text-gray-200 break-all">{v.value}</span>
+                <IfcLink request={reqFor(v.value)} className="text-gray-200 break-all">{v.value}</IfcLink>
                 {v.count > 1 && (
                   <span className="text-gray-600 flex-shrink-0">×{v.count}</span>
                 )}
@@ -73,21 +76,31 @@ function AggregateValue({ agg }: { agg: ValueAggregate }) {
   )
 }
 
-function PropRow({ prop, totalCount }: { prop: AggregatedProperty; totalCount: number }) {
+function PropRow({
+  prop,
+  totalCount,
+  reqFor,
+}: {
+  prop: AggregatedProperty
+  totalCount: number
+  reqFor: (value?: string) => InspectRequest
+}) {
   return (
     <div className="py-2 flex gap-2 border-b border-gray-900 last:border-0">
       <div className="w-40 flex-shrink-0">
-        <span className="text-xs text-gray-400">{prop.name}</span>
+        <IfcLink request={reqFor()} className="text-xs text-gray-400" title="Voir toutes les occurrences dans le code IFC">
+          {prop.name}
+        </IfcLink>
       </div>
       <div className="flex-1 min-w-0">
-        <AggregateValue agg={prop.aggregate} />
+        <AggregateValue agg={prop.aggregate} reqFor={reqFor} />
       </div>
       <CoverageBadge present={prop.aggregate.presentCount} total={totalCount} />
     </div>
   )
 }
 
-function PsetBlock({ pset, searchQ }: { pset: AggregatedPset; searchQ: string }) {
+function PsetBlock({ pset, searchQ, entityType }: { pset: AggregatedPset; searchQ: string; entityType: string }) {
   const [open, setOpen] = useState(true)
 
   const visibleProps = useMemo(() => {
@@ -108,7 +121,9 @@ function PsetBlock({ pset, searchQ }: { pset: AggregatedPset; searchQ: string })
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-800/50 transition-colors"
       >
-        <span className="text-xs font-mono text-gray-300">{pset.name}</span>
+        <IfcLink request={{ kind: 'property', entityType, pset: pset.name }} stop className="text-xs font-mono text-gray-300" title="Voir le Pset dans le code IFC">
+          {pset.name}
+        </IfcLink>
         <div className="flex items-center gap-3">
           <CoverageBadge present={pset.presentCount} total={pset.totalCount} />
           <span className="text-gray-700 text-xs">{open ? '▲' : '▼'}</span>
@@ -121,7 +136,12 @@ function PsetBlock({ pset, searchQ }: { pset: AggregatedPset; searchQ: string })
             <p className="py-2 text-xs text-gray-700 italic">Aucune propriété</p>
           ) : (
             visibleProps.map((p) => (
-              <PropRow key={p.name} prop={p} totalCount={pset.totalCount} />
+              <PropRow
+                key={p.name}
+                prop={p}
+                totalCount={pset.totalCount}
+                reqFor={(value) => ({ kind: 'property', entityType, pset: pset.name, prop: p.name, value })}
+              />
             ))
           )}
         </div>
@@ -248,9 +268,13 @@ export function InfoPanel() {
           {fr && <p className="text-base font-semibold text-gray-100 leading-tight">{fr}</p>}
           <p className="text-xs font-mono text-gray-500">{aggregatedData.entityType}</p>
         </div>
-        <span className="text-sm text-gray-500 flex-shrink-0">
+        <IfcLink
+          request={{ kind: 'instances', entityType: aggregatedData.entityType }}
+          className="text-sm text-gray-500 flex-shrink-0"
+          title="Voir les instances dans le code IFC"
+        >
           {aggregatedData.totalCount.toLocaleString('fr-FR')} occurrence{aggregatedData.totalCount > 1 ? 's' : ''}
-        </span>
+        </IfcLink>
         <button
           onClick={() => openGraph(aggregatedData.entityType)}
           className="px-2 py-1 text-xs text-blue-300 border border-blue-800 hover:border-blue-600 hover:text-blue-200 transition-colors flex-shrink-0"
@@ -288,7 +312,12 @@ export function InfoPanel() {
               </div>
               <div className="px-3">
                 {filteredAttrs.map((attr) => (
-                  <PropRow key={attr.name} prop={attr} totalCount={aggregatedData.totalCount} />
+                  <PropRow
+                    key={attr.name}
+                    prop={attr}
+                    totalCount={aggregatedData.totalCount}
+                    reqFor={(value) => ({ kind: 'attribute', entityType: aggregatedData.entityType, attr: attr.name, value })}
+                  />
                 ))}
               </div>
             </div>
@@ -301,7 +330,7 @@ export function InfoPanel() {
               Pset Standards
             </h2>
             {filteredStandard.map((pset) => (
-              <PsetBlock key={pset.name} pset={pset} searchQ={searchQ} />
+              <PsetBlock key={pset.name} pset={pset} searchQ={searchQ} entityType={aggregatedData.entityType} />
             ))}
           </section>
         )}
@@ -312,7 +341,7 @@ export function InfoPanel() {
               Pset Personnalisés
             </h2>
             {filteredCustom.map((pset) => (
-              <PsetBlock key={pset.name} pset={pset} searchQ={searchQ} />
+              <PsetBlock key={pset.name} pset={pset} searchQ={searchQ} entityType={aggregatedData.entityType} />
             ))}
           </section>
         )}

@@ -15,6 +15,8 @@ import type {
   TypeGraphEdge,
   WorkerOutMessage,
   ProjectInfo,
+  InspectRequest,
+  InspectResult,
 } from '../lib/types'
 
 export type { XY }
@@ -107,8 +109,11 @@ interface AppState {
   error: string | null
   entityTypes: EntityTypeSummary[]
   projectInfo: ProjectInfo | null
-  /** Valeur de géoréférencement cliquée : affiche le code IFC source à droite. */
-  geoCodeKey: string | null
+  /* --- Inspecteur IFC : pile de navigation (le dernier élément est affiché) --- */
+  inspectorStack: InspectResult[]
+  inspectorLoading: boolean
+  /** Occurrence sélectionnée dans la liste du résultat courant, si elle en a une. */
+  inspectorOccurrence: number | null
   selectedType: string | null
   aggregatedData: AggregatedEntityData | null
   searchQuery: string
@@ -151,7 +156,10 @@ interface AppState {
   loadFile: (file: File) => void
   closeFile: () => void
   selectType: (type: string) => void
-  showGeoCode: (key: string | null) => void
+  /** Ouvre le code IFC d'une information. `push` empile (navigation par référence), `occurrence` ne remplace que les lignes. */
+  inspect: (request: InspectRequest, mode?: 'replace' | 'push' | 'occurrence') => void
+  inspectBack: () => void
+  closeInspector: () => void
   setSearchQuery: (q: string) => void
   triggerGlobalSearch: () => void
   clearGlobalSearch: () => void
@@ -182,6 +190,9 @@ type SetState = (
 ) => void
 type GetState = () => AppState
 
+let inspectToken = 0
+let pendingInspect: { token: number; mode: 'replace' | 'push' | 'occurrence' } | null = null
+
 function getOrCreateWorker(set: SetState, get: GetState) {
   if (worker) {
     worker.terminate()
@@ -207,6 +218,26 @@ function getOrCreateWorker(set: SetState, get: GetState) {
       })
     } else if (msg.type === 'projectInfo') {
       set({ projectInfo: msg.data })
+    } else if (msg.type === 'inspectResult') {
+      if (!pendingInspect || pendingInspect.token !== msg.token) return
+      const mode = pendingInspect.mode
+      pendingInspect = null
+      set((prev) => {
+        const stack = prev.inspectorStack
+        const current = stack[stack.length - 1]
+        if (mode === 'occurrence' && current) {
+          // Garde la liste d'occurrences du résultat courant, ne change que les lignes.
+          const idx = current.occurrences?.items.findIndex(
+            (o) => msg.result.request.kind === 'chain' && o.chain.join() === msg.result.request.ids.join()
+          )
+          const merged: InspectResult = { ...current, groups: msg.result.groups, focusKey: msg.result.focusKey }
+          return { inspectorStack: [...stack.slice(0, -1), merged], inspectorLoading: false, inspectorOccurrence: idx !== undefined && idx >= 0 ? idx : null }
+        }
+        if (mode === 'push' && current) {
+          return { inspectorStack: [...stack, msg.result], inspectorLoading: false, inspectorOccurrence: null }
+        }
+        return { inspectorStack: [msg.result], inspectorLoading: false, inspectorOccurrence: msg.result.occurrences ? 0 : null }
+      })
     } else if (msg.type === 'aggregated') {
       set({
         aggregatedData: msg.data,
@@ -301,7 +332,9 @@ export const useStore = create<AppState>((set, get) => ({
   error: null,
   entityTypes: [],
   projectInfo: null,
-  geoCodeKey: null,
+  inspectorStack: [],
+  inspectorLoading: false,
+  inspectorOccurrence: null,
   selectedType: null,
   aggregatedData: null,
   searchQuery: '',
@@ -346,7 +379,9 @@ export const useStore = create<AppState>((set, get) => ({
       error: null,
       entityTypes: [],
       projectInfo: null,
-      geoCodeKey: null,
+      inspectorStack: [],
+  inspectorLoading: false,
+  inspectorOccurrence: null,
       aggregatedData: null,
       selectedType: null,
       globalSearchResults: null,
@@ -385,7 +420,9 @@ export const useStore = create<AppState>((set, get) => ({
       error: null,
       entityTypes: [],
       projectInfo: null,
-      geoCodeKey: null,
+      inspectorStack: [],
+  inspectorLoading: false,
+  inspectorOccurrence: null,
       selectedType: null,
       aggregatedData: null,
       searchQuery: '',
@@ -413,13 +450,30 @@ export const useStore = create<AppState>((set, get) => ({
     })
   },
 
-  showGeoCode: (key: string | null) => set({ geoCodeKey: key }),
+  inspect: (request, mode = 'replace') => {
+    if (!worker) return
+    inspectToken++
+    pendingInspect = { token: inspectToken, mode }
+    set({ inspectorLoading: true })
+    worker.postMessage({ type: 'inspect', request, token: inspectToken })
+  },
+
+  inspectBack: () => {
+    set((prev) => ({
+      inspectorStack: prev.inspectorStack.slice(0, -1),
+      inspectorOccurrence: null,
+    }))
+  },
+
+  closeInspector: () => set({ inspectorStack: [], inspectorLoading: false, inspectorOccurrence: null }),
 
   selectType: (type: string) => {
     if (!worker) return
     set({
       selectedType: type,
-      geoCodeKey: null,
+      inspectorStack: [],
+  inspectorLoading: false,
+  inspectorOccurrence: null,
       isLoading: true,
       loadProgress: 0,
       loadPhase: `Agrégation des ${type}…`,
@@ -447,6 +501,7 @@ export const useStore = create<AppState>((set, get) => ({
   clearError: () => set({ error: null }),
 
   openGraph: (entityType: string, fromOverview = false) => {
+    set({ inspectorStack: [], inspectorLoading: false, inspectorOccurrence: null })
     if (!worker) return
     set({
       graphOpen: true,
@@ -469,6 +524,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   closeGraph: () => {
+    set({ inspectorStack: [], inspectorLoading: false, inspectorOccurrence: null })
     // Revenir à la vue d'ensemble plutôt que tout fermer si on y est arrivé
     // par drill-down : elle est déjà calculée, pas besoin de la refaire.
     if (get().graphCameFromOverview) {
@@ -534,6 +590,7 @@ export const useStore = create<AppState>((set, get) => ({
   setGraphStoreyFilter: (nodeId: string | null) => set({ graphStoreyFilter: nodeId }),
 
   openGraphOverview: () => {
+    set({ inspectorStack: [], inspectorLoading: false, inspectorOccurrence: null })
     if (!worker) return
     set({
       graphOpen: true,
