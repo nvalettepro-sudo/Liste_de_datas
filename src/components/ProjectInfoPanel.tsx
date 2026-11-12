@@ -6,7 +6,7 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-2 py-0.5">
       <span className="text-gray-500 flex-shrink-0">{label}</span>
-      <span className="text-gray-200 text-right break-words">{value}</span>
+      <span className="text-gray-200 text-right break-all min-w-0">{value}</span>
     </div>
   )
 }
@@ -35,9 +35,11 @@ function Section({
   )
 }
 
-function formatDecimalDegrees(v: number, hemisphere: [string, string]): string {
-  const dir = v >= 0 ? hemisphere[0] : hemisphere[1]
-  return `${Math.abs(v).toFixed(6)}° ${dir}`
+const fmt = (v: number | null | undefined, digits = 3) =>
+  v === null || v === undefined ? null : (Object.is(v, -0) || Math.abs(v) < 5 * 10 ** -(digits + 1) ? 0 : v).toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+
+function Empty({ children }: { children: ReactNode }) {
+  return <p className="text-gray-600 italic py-0.5">{children}</p>
 }
 
 export function ProjectInfoPanel() {
@@ -51,7 +53,7 @@ export function ProjectInfoPanel() {
     )
   }
 
-  const { georeference, ownerHistory } = projectInfo
+  const { georeference, geolocation, ownerHistory } = projectInfo
 
   return (
     <div className="flex-1 overflow-y-auto px-2 py-2 space-y-2">
@@ -67,36 +69,89 @@ export function ProjectInfoPanel() {
       <Section title="Site">
         <Row label="Nom" value={projectInfo.siteName} />
         <Row label="Adresse" value={projectInfo.siteAddress} />
-        {georeference?.latitude != null && (
-          <Row label="Latitude" value={formatDecimalDegrees(georeference.latitude, ['N', 'S'])} />
-        )}
-        {georeference?.longitude != null && (
-          <Row label="Longitude" value={formatDecimalDegrees(georeference.longitude, ['E', 'O'])} />
-        )}
-        {georeference?.elevation != null && (
-          <Row label="Altitude" value={georeference.elevation.toFixed(2)} />
-        )}
-        {!georeference && <p className="text-gray-700 italic">Aucune coordonnée</p>}
       </Section>
 
-      {georeference?.mapConversion && (
-        <Section title="Géoréférencement (CRS)" defaultOpen={false}>
-          <Row label="Système" value={georeference.mapConversion.crsName} />
-          <Row label="Description" value={georeference.mapConversion.crsDescription} />
-          <Row label="Datum géodésique" value={georeference.mapConversion.geodeticDatum} />
-          <Row label="Datum vertical" value={georeference.mapConversion.verticalDatum} />
-          <Row label="Projection" value={georeference.mapConversion.mapProjection} />
-          <Row label="Zone" value={georeference.mapConversion.mapZone} />
-          <Row label="Est (Eastings)" value={georeference.mapConversion.eastings?.toFixed(3)} />
-          <Row label="Nord (Northings)" value={georeference.mapConversion.northings?.toFixed(3)} />
-          <Row label="Hauteur orthogonale" value={georeference.mapConversion.orthogonalHeight?.toFixed(3)} />
-          <Row
-            label="Rotation"
-            value={georeference.mapConversion.rotation != null ? `${georeference.mapConversion.rotation.toFixed(3)}°` : null}
-          />
-          <Row label="Échelle" value={georeference.mapConversion.scale} />
-        </Section>
-      )}
+      <Section title="Géolocalisation">
+        {geolocation && (geolocation.latitude !== null || geolocation.longitude !== null) ? (
+          <>
+            <Row label="Latitude" value={geolocation.latitudeDms} />
+            <Row label="Longitude" value={geolocation.longitudeDms} />
+            <Row
+              label="Décimal"
+              value={`${geolocation.latitude?.toFixed(6)}° ; ${geolocation.longitude?.toFixed(6)}°`}
+            />
+            <Row label="Altitude (RefElevation)" value={fmt(geolocation.elevation, 2)} />
+          </>
+        ) : (
+          <Empty>Latitude/longitude non renseignées (IfcSite.RefLatitude / RefLongitude)</Empty>
+        )}
+      </Section>
+
+      <Section title="Géoréférencement">
+        {georeference ? (
+          <>
+            {georeference.crs ? (
+              <>
+                <Row label="Système" value={georeference.crs.name} />
+                <Row label="Description" value={georeference.crs.description} />
+                <Row label="Datum géodésique" value={georeference.crs.geodeticDatum} />
+                <Row label="Datum vertical" value={georeference.crs.verticalDatum} />
+                <Row label="Projection" value={georeference.crs.mapProjection} />
+                <Row label="Zone" value={georeference.crs.mapZone} />
+                <Row label="Unité" value={georeference.crs.mapUnit} />
+              </>
+            ) : (
+              <Empty>Aucun système de coordonnées (IfcProjectedCRS)</Empty>
+            )}
+
+            <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Position du site (X, Y, Z)</p>
+            {georeference.sitePosition ? (
+              <>
+                <Row label="X" value={fmt(georeference.sitePosition.x, 2)} />
+                <Row label="Y" value={fmt(georeference.sitePosition.y, 2)} />
+                <Row label="Z" value={fmt(georeference.sitePosition.z, 2)} />
+              </>
+            ) : (
+              <Empty>Placement de l'IfcSite absent</Empty>
+            )}
+
+            <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Conversion (IfcMapConversion)</p>
+            {georeference.mapConversion ? (
+              <>
+                <Row label="Eastings (X)" value={fmt(georeference.mapConversion.eastings)} />
+                <Row label="Northings (Y)" value={fmt(georeference.mapConversion.northings)} />
+                <Row label="Hauteur orth. (Z)" value={fmt(georeference.mapConversion.orthogonalHeight)} />
+                <Row label="Rotation" value={`${fmt(georeference.mapConversion.rotation)}°`} />
+                <Row label="Échelle" value={fmt(georeference.mapConversion.scale, 0)} />
+                {georeference.projectedPosition && georeference.sitePosition &&
+                  (Math.abs(georeference.projectedPosition.x - georeference.sitePosition.x) > 0.005 ||
+                    Math.abs(georeference.projectedPosition.y - georeference.sitePosition.y) > 0.005 ||
+                    Math.abs(georeference.projectedPosition.z - georeference.sitePosition.z) > 0.005) && (
+                  <>
+                    <p className="pt-1.5 text-[10px] uppercase tracking-wider text-gray-500">Site dans le CRS</p>
+                    <Row label="X" value={fmt(georeference.projectedPosition.x, 2)} />
+                    <Row label="Y" value={fmt(georeference.projectedPosition.y, 2)} />
+                    <Row label="Z" value={fmt(georeference.projectedPosition.z, 2)} />
+                  </>
+                )}
+              </>
+            ) : (
+              <Empty>
+                {projectInfo.schema === 'IFC2X3'
+                  ? 'Inexistant en IFC2x3 (introduit en IFC4)'
+                  : 'Aucun IfcMapConversion dans le fichier'}
+              </Empty>
+            )}
+
+            <Row
+              label="Nord vrai"
+              value={georeference.trueNorth !== null ? `${fmt(georeference.trueNorth)}°` : null}
+            />
+          </>
+        ) : (
+          <Empty>Aucune donnée de géoréférencement</Empty>
+        )}
+      </Section>
 
       <Section title={`Étages — ${projectInfo.storeys.length}`}>
         {projectInfo.storeys.length === 0 ? (
@@ -106,7 +161,7 @@ export function ProjectInfoPanel() {
             <Row
               key={i}
               label={s.name ?? `Étage ${i + 1}`}
-              value={s.elevation != null ? `${s.elevation.toFixed(2)} m` : '—'}
+              value={s.elevation != null ? `${fmt(s.elevation, 2)} m` : '—'}
             />
           ))
         )}

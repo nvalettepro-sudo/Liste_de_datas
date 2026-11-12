@@ -177,28 +177,53 @@ export interface StoreyInfo {
   elevation: number | null
 }
 
-export interface MapConversionInfo {
-  eastings: number | null
-  northings: number | null
-  orthogonalHeight: number | null
-  /** Dérivée de XAxisAbscissa/XAxisOrdinate, en degrés. */
-  rotation: number | null
-  scale: number | null
-  crsName: string | null
-  crsDescription: string | null
-  geodeticDatum: string | null
-  verticalDatum: string | null
-  mapProjection: string | null
-  mapZone: string | null
+export interface XYZ {
+  x: number
+  y: number
+  z: number
 }
 
+/**
+ * GÉORÉFÉRENCEMENT : repère de coordonnées projetées (X/Y/Z) du modèle.
+ * Distinct de la géolocalisation (latitude/longitude) ci-dessous.
+ */
 export interface GeoReference {
-  /** IfcSite.RefLatitude/RefLongitude convertis en degrés décimaux (2x3 et 4+). */
+  /** IfcProjectedCRS — null si le fichier n'en déclare pas. */
+  crs: {
+    name: string | null
+    description: string | null
+    geodeticDatum: string | null
+    verticalDatum: string | null
+    mapProjection: string | null
+    mapZone: string | null
+    mapUnit: string | null
+  } | null
+  /** IfcMapConversion (IFC4+) — origine du repère projeté, peut valoir 0/0/0. */
+  mapConversion: {
+    eastings: number | null
+    northings: number | null
+    orthogonalHeight: number | null
+    /** Dérivée de XAxisAbscissa/XAxisOrdinate, en degrés. */
+    rotation: number | null
+    scale: number | null
+  } | null
+  /** Position absolue de l'IfcSite (chaîne d'IfcLocalPlacement composée), dans le repère du modèle. */
+  sitePosition: XYZ | null
+  /** sitePosition passée dans IfcMapConversion — coordonnées dans le CRS cible. Null sans conversion. */
+  projectedPosition: XYZ | null
+  /** Angle du Nord vrai (IfcGeometricRepresentationContext.TrueNorth) par rapport à l'axe Y, en degrés. */
+  trueNorth: number | null
+}
+
+/** GÉOLOCALISATION : coordonnées géographiques de l'IfcSite (latitude/longitude). */
+export interface GeoLocation {
   latitude: number | null
   longitude: number | null
+  /** Format Solibri : 48°49'24,826450" */
+  latitudeDms: string | null
+  longitudeDms: string | null
+  /** IfcSite.RefElevation */
   elevation: number | null
-  /** IFC4+ uniquement : conversion vers un système de coordonnées projeté (IfcMapConversion). */
-  mapConversion: MapConversionInfo | null
 }
 
 export interface OwnerHistoryInfo {
@@ -223,6 +248,7 @@ export interface ProjectInfo {
   buildingName: string | null
   storeys: StoreyInfo[]
   georeference: GeoReference | null
+  geolocation: GeoLocation | null
   ownerHistory: OwnerHistoryInfo | null
   units: UnitInfo[]
 }
