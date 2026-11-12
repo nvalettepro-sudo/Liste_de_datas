@@ -193,47 +193,139 @@ export interface XYZ {
   z: number
 }
 
+/* ---------- Géoréférencement (spécification « Géoréférencement IFC — lecture et affichage ») ---------- */
+
 /**
- * GÉORÉFÉRENCEMENT : repère de coordonnées projetées (X/Y/Z) du modèle.
- * Distinct de la géolocalisation (latitude/longitude) ci-dessous.
+ * Niveau de certitude d'une règle (spéc. §0) :
+ * VERIFIE = standard officiel ou constaté dans Solibri ; VERIFIE_2X3 = constaté
+ * dans Solibri en IFC2x3 seulement ; STANDARD = défini par la norme, non
+ * comparé à Solibri ; HYPOTHESE = déduction ou convention non confirmée.
  */
-export interface GeoReference {
-  /** IfcProjectedCRS — null si le fichier n'en déclare pas. */
-  crs: {
-    name: string | null
-    description: string | null
-    geodeticDatum: string | null
-    verticalDatum: string | null
-    mapProjection: string | null
-    mapZone: string | null
-    mapUnit: string | null
-  } | null
-  /** IfcMapConversion (IFC4+) — origine du repère projeté, peut valoir 0/0/0. */
-  mapConversion: {
-    eastings: number | null
-    northings: number | null
-    orthogonalHeight: number | null
-    /** Dérivée de XAxisAbscissa/XAxisOrdinate, en degrés. */
-    rotation: number | null
-    scale: number | null
-  } | null
-  /** Position absolue de l'IfcSite (chaîne d'IfcLocalPlacement composée), dans le repère du modèle. */
-  sitePosition: XYZ | null
-  /** sitePosition passée dans IfcMapConversion — coordonnées dans le CRS cible. Null sans conversion. */
-  projectedPosition: XYZ | null
-  /** Angle du Nord vrai (IfcGeometricRepresentationContext.TrueNorth) par rapport à l'axe Y, en degrés. */
-  trueNorth: number | null
+export type Certainty = 'VERIFIE' | 'VERIFIE_2X3' | 'STANDARD' | 'HYPOTHESE'
+
+/**
+ * Statut global (spéc. §5). GEOREF_IDENTITE est un ajout à la spécification :
+ * IfcMapConversion nulle mais carte (CRS) identifiée — les coordonnées du
+ * repère du projet se lisent directement sur la carte.
+ */
+export type GeoStatus =
+  | 'GEOREF_COMPLET'
+  | 'GEOREF_IDENTITE'
+  | 'GEOREF_SANS_CRS'
+  | 'POSITION_LOCALE'
+  | 'GPS_SEUL'
+  | 'AUCUN'
+
+export type GeoPrimarySource = 'MAP_CONVERSION' | 'SITE_PLACEMENT' | 'SITE_LATLONG' | null
+
+export interface XYZ {
+  x: number
+  y: number
+  z: number
 }
 
-/** GÉOLOCALISATION : coordonnées géographiques de l'IfcSite (latitude/longitude). */
-export interface GeoLocation {
-  latitude: number | null
-  longitude: number | null
-  /** Format Solibri : 48°49'24,826450" */
-  latitudeDms: string | null
-  longitudeDms: string | null
-  /** IfcSite.RefElevation */
-  elevation: number | null
+/** Fiche 4.1 / 4.3 / 4.4 — valeurs brutes, dans l'unité de longueur du fichier. */
+export interface GeoMapConversion {
+  stepId: number
+  type: 'IfcMapConversion' | 'IfcMapConversionScaled' | 'IfcRigidOperation'
+  sourceContextStepId: number | null
+  sourceContextDim: number | null
+  eastings: number | null
+  northings: number | null
+  orthogonalHeight: number | null
+  xAxisAbscissa: number | null
+  xAxisOrdinate: number | null
+  scale: number | null
+  scaleEffective: number
+  factors: { x: number | null; y: number | null; z: number | null } | null
+  /** θ (§7.1), en degrés entre 0 et 360 ; null si direction invalide. */
+  rotationDeg: number | null
+  rotationMissing: boolean
+  rotationValid: boolean
+  isZero: boolean
+  certainty: Certainty
+}
+
+/** Fiche 4.2. */
+export interface GeoCrs {
+  stepId: number
+  type: string
+  name: string | null
+  epsgCode: number | null
+  description: string | null
+  geodeticDatum: string | null
+  verticalDatum: string | null
+  mapProjection: string | null
+  mapZone: string | null
+  mapUnit: string | null
+  wkt: string | null
+}
+
+export interface GeoAngle {
+  raw: number[]
+  decimal: number
+  /** « 48° 51' 12,2485" N » */
+  dms: string
+}
+
+/** Fiches 4.5 et 4.6. */
+export interface GeoSite {
+  stepId: number
+  name: string | null
+  isPrimary: boolean
+  placement: {
+    localPlacementStepId: number
+    relativeToStepId: number | null
+    pointStepId: number | null
+    pointType: string | null
+    x: number
+    y: number
+    z: number
+    refDirection: XYZ | null
+    rotationDeg: number
+    isZero: boolean
+    composed: boolean
+    certainty: Certainty
+  } | null
+  refLatitude: GeoAngle | null
+  refLongitude: GeoAngle | null
+  refElevation: number | null
+  /** §7.2 — origine du terrain sur la carte ; null sans conversion exploitable. */
+  mapPosition: { e: number; n: number; h: number } | null
+}
+
+export interface GeoCheck {
+  /** Code stable, ex. CASE_08_MULTIPLE_MAP_CONVERSIONS. */
+  code: string
+  severity: 'ok' | 'info' | 'warn'
+  text: string
+  certainty: Certainty
+  /** Clé de l'inspecteur pour voir les lignes concernées. */
+  key?: string
+}
+
+/** Objet unique produit par l'analyse (spéc. §9) ; l'interface ne lit que lui. */
+export interface GeoAnalysis {
+  schema: string
+  fileSchemaRaw: string | null
+  authoringTool: string | null
+  /** Origine des coordonnées déclarée par Revit (FILE_DESCRIPTION). */
+  coordinateBase: string | null
+  lengthUnit: { name: string; prefix: string | null; toMetre: number; stepId: number | null }
+  status: GeoStatus
+  statusCertainty: Certainty
+  primarySource: GeoPrimarySource
+  mapConversion: GeoMapConversion | null
+  otherMapConversions: GeoMapConversion[]
+  crs: GeoCrs | null
+  sites: GeoSite[]
+  context: {
+    stepId: number
+    dim: number | null
+    wcs: XYZ & { isIdentity: boolean }
+    trueNorth: { x: number; y: number; stepId: number | null; angleDeg: number; isDefault: boolean }
+  } | null
+  checks: GeoCheck[]
 }
 
 export interface OwnerHistoryInfo {
@@ -252,8 +344,6 @@ export interface ProjectInfo {
   schema: string
   /** Model View Definition, extrait de l'en-tête STEP (FILE_DESCRIPTION). */
   mvd: string | null
-  /** Origine des coordonnées déclarée par Revit dans FILE_DESCRIPTION (« Point de base du projet », « Coordonnées partagées »…). */
-  coordinateBase: string | null
   projectName: string | null
   projectLongName: string | null
   projectPhase: string | null
@@ -261,8 +351,8 @@ export interface ProjectInfo {
   siteAddress: string | null
   buildingName: string | null
   storeys: StoreyInfo[]
-  georeference: GeoReference | null
-  geolocation: GeoLocation | null
+  /** Analyse complète du géoréférencement (spéc. §9). */
+  geo: GeoAnalysis
   ownerHistory: OwnerHistoryInfo | null
   units: UnitInfo[]
 }

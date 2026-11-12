@@ -1,5 +1,8 @@
 import * as WebIFC from 'web-ifc'
 import { GRAPH_REL_TYPES } from '../lib/types'
+import { splitStepLine } from '../lib/step'
+import { createIfcReader } from '../lib/ifcReader'
+import { analyzeGeoreference } from '../lib/georef'
 import type {
   EntityTypeSummary,
   PsetData,
@@ -21,9 +24,7 @@ import type {
   WorkerOutMessage,
   ProjectInfo,
   StoreyInfo,
-  GeoReference,
-  GeoLocation,
-  XYZ,
+  GeoAnalysis,
   InspectArg,
   InspectLine,
   InspectGroup,
@@ -48,6 +49,8 @@ const aggregationCache = new Map<string, AggregatedEntityData>()
 /** Octets du fichier et position de départ de chaque ligne « #id= » — l'inspecteur ne décode que la ligne demandée. */
 let fileBytes: Uint8Array | null = null
 const lineIndex = new Map<number, number>()
+/** Dernière analyse de géoréférencement : l'inspecteur montre les mêmes instances que l'onglet. */
+let lastGeo: GeoAnalysis | null = null
 
 function post(msg: WorkerOutMessage) {
   self.postMessage(msg)
@@ -230,32 +233,6 @@ function numOf(raw: unknown): number | null {
 }
 
 /**
- * IfcCompoundPlaneAngleMeasure : [degrés, minutes, secondes, millionièmes de
- * seconde]. web-ifc renvoie la liste dans un wrapper `{ value: [...] }`
- * plutôt qu'un tableau nu (contrairement aux mesures simples déjà gérées par
- * valueToString), d'où le déballage explicite ici.
- */
-function compoundAngleParts(raw: unknown): number[] | null {
-  const wrapped = raw as Record<string, unknown> | undefined
-  const list = Array.isArray(raw) ? raw : Array.isArray(wrapped?.value) ? wrapped!.value : null
-  if (!Array.isArray(list) || list.length === 0) return null
-  return list.map((v) => numOf(v) ?? 0)
-}
-
-function compoundAngleToDecimal(parts: number[]): number {
-  const [deg, min = 0, sec = 0, micro = 0] = parts
-  const sign = deg < 0 ? -1 : 1
-  return sign * (Math.abs(deg) + min / 60 + sec / 3600 + micro / 3_600_000_000)
-}
-
-/** Même présentation que Solibri : 48°49'24,826450" */
-function compoundAngleToDms(parts: number[]): string {
-  const [deg, min = 0, sec = 0, micro = 0] = parts
-  const seconds = (Math.abs(sec) + Math.abs(micro) / 1_000_000).toFixed(6).replace('.', ',')
-  return `${deg}°${Math.abs(min)}'${seconds}"`
-}
-
-/**
  * Le MVD (Model View Definition) n'est pas porté par une entité mais par
  * l'en-tête STEP (FILE_DESCRIPTION), ex. "ViewDefinition [ReferenceView_V1.2]".
  * Extraction directe du texte plutôt que via l'API : plus simple et tout
@@ -272,29 +249,9 @@ function extractMvd(buffer: ArrayBuffer): string | null {
   }
 }
 
-/**
- * Décode les échappements STEP d'une chaîne d'en-tête (ISO 10303-21) :
- * \X\HH (ISO-8859-1), \X2\HHHH…\X0\ (UTF-16), \S\c (caractère + 128).
- */
-function decodeStepString(s: string): string {
-  return s
-    .replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/gi, (_, hex: string) =>
-      String.fromCharCode(...(hex.match(/.{4}/g) ?? []).map((h) => parseInt(h, 16)))
-    )
-    .replace(/\\X\\([0-9A-F]{2})/gi, (_, h: string) => String.fromCharCode(parseInt(h, 16)))
-    .replace(/\\S\\(.)/g, (_, c: string) => String.fromCharCode(c.charCodeAt(0) + 128))
-}
-
-/** « CoordinateReference [CoordinateBase: …] » — écrit par Revit dans FILE_DESCRIPTION. */
-function extractCoordinateBase(buffer: ArrayBuffer): string | null {
-  try {
-    const head = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4096))
-    const text = new TextDecoder('utf-8', { fatal: false }).decode(head)
-    const m = text.match(/CoordinateBase\s*:\s*([^,\]']+)/i)
-    return m ? decodeStepString(m[1].trim()) : null
-  } catch {
-    return null
-  }
+function analyzeGeo(): GeoAnalysis {
+  lastGeo = analyzeGeoreference(createIfcReader(api!, modelId, fileBytes!))
+  return lastGeo
 }
 
 function buildStoreys(): StoreyInfo[] {
@@ -308,180 +265,6 @@ function buildStoreys(): StoreyInfo[] {
   }
   storeys.sort((a, b) => (a.elevation ?? 0) - (b.elevation ?? 0))
   return storeys
-}
-
-type Vec3 = [number, number, number]
-interface Frame { o: Vec3; x: Vec3; y: Vec3; z: Vec3 }
-
-function vecOf(raw: unknown, fallback: Vec3): Vec3 {
-  const line = resolveRef(raw)
-  const list = (line?.Coordinates ?? line?.DirectionRatios) as unknown
-  const wrapped = list as Record<string, unknown> | undefined
-  const arr = Array.isArray(list) ? list : Array.isArray(wrapped?.value) ? (wrapped!.value as unknown[]) : null
-  if (!arr) return fallback
-  const n = arr.map((v) => numOf(v) ?? 0)
-  return [n[0] ?? 0, n[1] ?? 0, n[2] ?? 0]
-}
-
-const norm = (v: Vec3): Vec3 => {
-  const l = Math.hypot(v[0], v[1], v[2]) || 1
-  return [v[0] / l, v[1] / l, v[2] / l]
-}
-const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-const cross = (a: Vec3, b: Vec3): Vec3 => [
-  a[1] * b[2] - a[2] * b[1],
-  a[2] * b[0] - a[0] * b[2],
-  a[0] * b[1] - a[1] * b[0],
-]
-
-/** IfcAxis2Placement3D → repère orthonormé (Z = Axis, X = RefDirection orthogonalisée). */
-function frameOfAxis2Placement(ref: unknown): Frame {
-  const line = resolveRef(ref)
-  const o = line ? vecOf(line.Location, [0, 0, 0]) : ([0, 0, 0] as Vec3)
-  const z = norm(line ? vecOf(line.Axis, [0, 0, 1]) : [0, 0, 1])
-  let x = line ? vecOf(line.RefDirection, [1, 0, 0]) : ([1, 0, 0] as Vec3)
-  const d = dot(x, z)
-  x = norm([x[0] - d * z[0], x[1] - d * z[1], x[2] - d * z[2]])
-  return { o, x, y: cross(z, x), z }
-}
-
-/** Compose la chaîne IfcLocalPlacement (PlacementRelTo) jusqu'au repère du modèle. */
-function absolutePlacement(placementRef: unknown, depth = 0): Frame | null {
-  const pl = resolveRef(placementRef)
-  if (!pl || depth > 32) return null
-  const local = frameOfAxis2Placement(pl.RelativePlacement)
-  const parent = pl.PlacementRelTo ? absolutePlacement(pl.PlacementRelTo, depth + 1) : null
-  if (!parent) return local
-  const apply = (v: Vec3): Vec3 => [
-    parent.x[0] * v[0] + parent.y[0] * v[1] + parent.z[0] * v[2],
-    parent.x[1] * v[0] + parent.y[1] * v[1] + parent.z[1] * v[2],
-    parent.x[2] * v[0] + parent.y[2] * v[1] + parent.z[2] * v[2],
-  ]
-  const po = apply(local.o)
-  return {
-    o: [parent.o[0] + po[0], parent.o[1] + po[1], parent.o[2] + po[2]],
-    x: apply(local.x),
-    y: apply(local.y),
-    z: apply(local.z),
-  }
-}
-
-function unitSymbol(line: Record<string, unknown>): string {
-  const name = safeStr(line.Name) ?? ''
-  const prefix = safeStr(line.Prefix)
-  if (!prefix && !SI_UNIT_SYMBOL[name] && line.ConversionFactor !== undefined) return name
-  return (prefix ? SI_PREFIX_SYMBOL[prefix] ?? prefix : '') + (SI_UNIT_SYMBOL[name] ?? name.toLowerCase())
-}
-
-/**
- * GÉOLOCALISATION — latitude/longitude de l'IfcSite (toutes versions IFC).
- */
-function buildGeolocation(): GeoLocation | null {
-  if (!api) return null
-  const siteIds = api.GetLineIDsWithType(modelId, WebIFC.IFCSITE)
-  if (siteIds.size() === 0) return null
-  const site = api.GetLine(modelId, siteIds.get(0), false) as Record<string, unknown>
-  const lat = compoundAngleParts(site.RefLatitude)
-  const lon = compoundAngleParts(site.RefLongitude)
-  const elevation = numOf(site.RefElevation)
-  if (!lat && !lon && elevation === null) return null
-  return {
-    latitude: lat ? compoundAngleToDecimal(lat) : null,
-    longitude: lon ? compoundAngleToDecimal(lon) : null,
-    latitudeDms: lat ? compoundAngleToDms(lat) : null,
-    longitudeDms: lon ? compoundAngleToDms(lon) : null,
-    elevation,
-  }
-}
-
-/**
- * GÉORÉFÉRENCEMENT — repère de coordonnées projetées : IfcProjectedCRS +
- * IfcMapConversion (IFC4+ uniquement), position X/Y/Z de l'IfcSite obtenue en
- * composant sa chaîne d'IfcLocalPlacement (valable dans toutes les versions —
- * c'est là que Revit/Solibri lisent les « coordonnées globales »), et Nord vrai.
- */
-function buildGeoreference(schema: string): GeoReference | null {
-  if (!api) return null
-
-  let crs: GeoReference['crs'] = null
-  let mapConversion: GeoReference['mapConversion'] = null
-  if (schema !== 'IFC2X3') {
-    const mcIds = api.GetLineIDsWithType(modelId, WebIFC.IFCMAPCONVERSION)
-    if (mcIds.size() > 0) {
-      const mc = api.GetLine(modelId, mcIds.get(0), false) as Record<string, unknown>
-      const xAbs = numOf(mc.XAxisAbscissa) ?? 1
-      const xOrd = numOf(mc.XAxisOrdinate) ?? 0
-      mapConversion = {
-        eastings: numOf(mc.Eastings),
-        northings: numOf(mc.Northings),
-        orthogonalHeight: numOf(mc.OrthogonalHeight),
-        rotation: (Math.atan2(xOrd, xAbs) * 180) / Math.PI,
-        scale: numOf(mc.Scale) ?? 1,
-      }
-      const t = resolveRef(mc.TargetCRS)
-      if (t) {
-        const unit = resolveRef(t.MapUnit)
-        crs = {
-          name: safeStr(t.Name),
-          description: safeStr(t.Description),
-          geodeticDatum: safeStr(t.GeodeticDatum),
-          verticalDatum: safeStr(t.VerticalDatum),
-          mapProjection: safeStr(t.MapProjection),
-          mapZone: safeStr(t.MapZone),
-          mapUnit: unit ? unitSymbol(unit) : null,
-        }
-      }
-    } else {
-      // IfcProjectedCRS déclaré sans IfcMapConversion : on garde le système.
-      const crsIds = api.GetLineIDsWithType(modelId, WebIFC.IFCPROJECTEDCRS)
-      if (crsIds.size() > 0) {
-        const t = api.GetLine(modelId, crsIds.get(0), false) as Record<string, unknown>
-        const unit = resolveRef(t.MapUnit)
-        crs = {
-          name: safeStr(t.Name),
-          description: safeStr(t.Description),
-          geodeticDatum: safeStr(t.GeodeticDatum),
-          verticalDatum: safeStr(t.VerticalDatum),
-          mapProjection: safeStr(t.MapProjection),
-          mapZone: safeStr(t.MapZone),
-          mapUnit: unit ? unitSymbol(unit) : null,
-        }
-      }
-    }
-  }
-
-  let sitePosition: XYZ | null = null
-  const siteIds = api.GetLineIDsWithType(modelId, WebIFC.IFCSITE)
-  if (siteIds.size() > 0) {
-    const site = api.GetLine(modelId, siteIds.get(0), false) as Record<string, unknown>
-    const frame = site.ObjectPlacement ? absolutePlacement(site.ObjectPlacement) : null
-    if (frame) sitePosition = { x: frame.o[0], y: frame.o[1], z: frame.o[2] }
-  }
-
-  let projectedPosition: XYZ | null = null
-  if (sitePosition && mapConversion) {
-    const a = Math.cos((mapConversion.rotation! * Math.PI) / 180)
-    const b = Math.sin((mapConversion.rotation! * Math.PI) / 180)
-    const sc = mapConversion.scale ?? 1
-    projectedPosition = {
-      x: (mapConversion.eastings ?? 0) + sc * (a * sitePosition.x - b * sitePosition.y),
-      y: (mapConversion.northings ?? 0) + sc * (b * sitePosition.x + a * sitePosition.y),
-      z: (mapConversion.orthogonalHeight ?? 0) + sitePosition.z,
-    }
-  }
-
-  let trueNorth: number | null = null
-  const ctxIds = api.GetLineIDsWithType(modelId, WebIFC.IFCGEOMETRICREPRESENTATIONCONTEXT)
-  for (let i = 0; i < ctxIds.size() && trueNorth === null; i++) {
-    const ctx = api.GetLine(modelId, ctxIds.get(i), false) as Record<string, unknown>
-    if (!ctx?.TrueNorth) continue
-    const d = vecOf(ctx.TrueNorth, [0, 1, 0])
-    // Angle par rapport à l'axe Y, positif vers l'ouest (convention IFC : direction du Nord).
-    trueNorth = (Math.atan2(-d[0], d[1]) * 180) / Math.PI
-  }
-
-  if (!crs && !mapConversion && !sitePosition && trueNorth === null) return null
-  return { crs, mapConversion, sitePosition, projectedPosition, trueNorth }
 }
 
 function buildOwnerHistory(): OwnerHistoryInfo | null {
@@ -576,7 +359,6 @@ function buildProjectInfo(buffer: ArrayBuffer, schema: string): ProjectInfo {
     },
     schema,
     mvd: extractMvd(buffer),
-    coordinateBase: extractCoordinateBase(buffer),
     projectName: null,
     projectLongName: null,
     projectPhase: null,
@@ -584,8 +366,7 @@ function buildProjectInfo(buffer: ArrayBuffer, schema: string): ProjectInfo {
     siteAddress: null,
     buildingName: null,
     storeys: buildStoreys(),
-    georeference: buildGeoreference(schema),
-    geolocation: buildGeolocation(),
+    geo: analyzeGeo(),
     ownerHistory: buildOwnerHistory(),
     units: buildUnits(),
   }
@@ -1497,31 +1278,6 @@ function rawHeaderLine(name: string): string | null {
   return m ? `${name}(${m[1]});`.replace(/\s*[\r\n]+\s*/g, ' ') : null
 }
 
-/** Découpe « #id=ENTITY(a,b,(c,d),'e');» en en-tête et arguments de premier niveau. */
-function splitStepLine(line: string): { head: string; args: string[] } | null {
-  const open = line.indexOf('(')
-  const close = line.lastIndexOf(')')
-  if (open < 0 || close < open) return null
-  const body = line.slice(open + 1, close)
-  const args: string[] = []
-  let depth = 0
-  let inStr = false
-  let start = 0
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i]
-    if (c === "'") inStr = !inStr
-    else if (inStr) continue
-    else if (c === '(') depth++
-    else if (c === ')') depth--
-    else if (c === ',' && depth === 0) {
-      args.push(body.slice(start, i))
-      start = i + 1
-    }
-  }
-  args.push(body.slice(start))
-  return { head: line.slice(0, open), args }
-}
-
 function refsIn(text: string): number[] | undefined {
   if (text.includes("'")) return undefined
   const out: number[] = []
@@ -1547,7 +1303,7 @@ function attrNames(id: number): string[] {
  * attribut, références cliquables et clés de mise en évidence (`keys` :
  * nom d'attribut → clé).
  */
-function inspectLine(id: number, opts: { note?: string; keys?: Record<string, string> } = {}): InspectLine | null {
+function inspectLine(id: number, opts: { note?: string; keys?: Record<string, string>; keysByIndex?: Record<number, string> } = {}): InspectLine | null {
   const raw = rawLine(id)
   const parts = raw ? splitStepLine(raw) : null
   if (!parts) return null
@@ -1556,7 +1312,7 @@ function inspectLine(id: number, opts: { note?: string; keys?: Record<string, st
   const typeName = parts.head.slice(eq + 1).trim()
   const args: InspectArg[] = parts.args.map((text, i) => {
     const name = names[i]
-    const key = name && opts.keys ? opts.keys[name] : undefined
+    const key = name && opts.keys ? opts.keys[name] : !names.length && opts.keysByIndex ? opts.keysByIndex[i] : undefined
     const refs = refsIn(text)
     const a: InspectArg = { text }
     if (name) a.name = name
@@ -1628,73 +1384,74 @@ function chainGroups(ids: number[], focusId?: number, focusAttr?: string, title 
 /* ---- Géolocalisation / géoréférencement ---- */
 
 function geoGroups(): InspectGroup[] {
-  const siteId = firstId(WebIFC.IFCSITE)
-  const site = lineOf(siteId)
-
+  const g = lastGeo
+  const site = g?.sites[0] ?? null
   const groups: (InspectGroup | null)[] = []
-  groups.push(groupOf('Géolocalisation — IfcSite', [
-    siteId === null ? null : inspectLine(siteId, {
-      note: 'Site : latitude, longitude, altitude de référence',
+
+  groups.push(groupOf('Géolocalisation indicative — IfcSite', [
+    site ? inspectLine(site.stepId, {
+      note: 'Site : RefLatitude, RefLongitude, RefElevation (attributs 10 à 12)',
       keys: { RefLatitude: 'geo.latitude', RefLongitude: 'geo.longitude', RefElevation: 'geo.elevation', ObjectPlacement: 'site.position' },
-    }),
+    }) : null,
   ]))
 
-  let mcId: number | null = null
-  let crsId: number | null = null
-  try { mcId = firstId(WebIFC.IFCMAPCONVERSION) } catch { /* schéma sans l'entité */ }
-  if (mcId !== null) crsId = refId(lineOf(mcId)!.TargetCRS)
-  else { try { crsId = firstId(WebIFC.IFCPROJECTEDCRS) } catch { /* idem */ } }
-  const crs = lineOf(crsId)
-  const unitId = crs ? refId(crs.MapUnit) : null
-  groups.push(groupOf('Système de coordonnées — IfcProjectedCRS', [
-    crsId === null ? null : inspectLine(crsId, {
-      note: 'Nom, description, datum géodésique, datum vertical, projection, zone, unité',
+  const crs = g?.crs ?? null
+  const unitId = crs ? refId(lineOf(crs.stepId)?.MapUnit) : null
+  groups.push(groupOf(`Carte — ${crs?.type ?? 'IfcProjectedCRS'}`, [
+    crs ? inspectLine(crs.stepId, {
+      note: 'Name, Description, GeodeticDatum, VerticalDatum, MapProjection, MapZone, MapUnit',
       keys: {
         Name: 'crs.name', Description: 'crs.description', GeodeticDatum: 'crs.geodeticDatum',
         VerticalDatum: 'crs.verticalDatum', MapProjection: 'crs.mapProjection', MapZone: 'crs.mapZone', MapUnit: 'crs.mapUnit',
       },
-    }),
-    unitId === null ? null : inspectLine(unitId, { note: 'Unité du système de coordonnées', keys: { Prefix: 'crs.mapUnit', Name: 'crs.mapUnit' } }),
-  ]))
-  groups.push(groupOf('Conversion — IfcMapConversion', [
-    mcId === null ? null : inspectLine(mcId, {
-      note: 'Eastings, Northings, OrthogonalHeight, XAxisAbscissa, XAxisOrdinate, Scale',
-      keys: {
-        Eastings: 'mc.eastings', Northings: 'mc.northings', OrthogonalHeight: 'mc.orthogonalHeight',
-        XAxisAbscissa: 'mc.rotation', XAxisOrdinate: 'mc.rotation', Scale: 'mc.scale',
-      },
-    }),
+      keysByIndex: { 0: 'crs.name', 1: 'crs.description', 2: 'crs.geodeticDatum' },
+    }) : null,
+    unitId === null ? null : inspectLine(unitId, { note: 'Unité de la carte', keys: { Prefix: 'crs.mapUnit', Name: 'crs.mapUnit' } }),
   ]))
 
+  const mcs = g ? [g.mapConversion, ...g.otherMapConversions].filter((m) => m !== null) : []
+  groups.push(groupOf(`Conversion vers la carte — ${g?.mapConversion?.type ?? 'IfcMapConversion'}`, mcs.map((m, i) =>
+    inspectLine(m!.stepId, {
+      note: i === 0
+        ? 'Eastings, Northings, OrthogonalHeight, XAxisAbscissa, XAxisOrdinate, Scale (attributs 3 à 8)'
+        : 'Autre conversion (non retenue)',
+      keys: i === 0 ? {
+        Eastings: 'mc.eastings', Northings: 'mc.northings', OrthogonalHeight: 'mc.orthogonalHeight',
+        XAxisAbscissa: 'mc.rotation', XAxisOrdinate: 'mc.rotation', Scale: 'mc.scale',
+      } : {},
+      // IfcMapConversionScaled n'est pas décodée par web-ifc : repérage par position.
+      keysByIndex: i === 0 ? { 2: 'mc.eastings', 3: 'mc.northings', 4: 'mc.orthogonalHeight', 5: 'mc.rotation', 6: 'mc.rotation', 7: 'mc.scale', 8: 'mc.scale', 9: 'mc.scale', 10: 'mc.scale' } : undefined,
+    })
+  )))
+
   const chain: (InspectLine | null)[] = []
-  let plId = site ? refId(site.ObjectPlacement) : null
+  let plId = site?.placement?.localPlacementStepId ?? null
   for (let depth = 0; plId !== null && depth < 32; depth++) {
     const pl = lineOf(plId)
     if (!pl) break
-    chain.push(inspectLine(plId, { note: depth === 0 ? 'Placement du site' : 'Placement parent' }))
+    chain.push(inspectLine(plId, { note: depth === 0 ? 'Placement du terrain (PlacementRelTo, RelativePlacement)' : 'Placement parent' }))
     const axId = refId(pl.RelativePlacement)
     const ax = lineOf(axId)
     if (ax) {
-      chain.push(inspectLine(axId!, { note: 'Repère : origine, axe Z, direction X' }))
+      chain.push(inspectLine(axId!, { note: 'IfcAxis2Placement3D : Location, Axis, RefDirection' }))
       const loc = refId(ax.Location)
       const dir = refId(ax.RefDirection)
-      if (loc !== null) chain.push(inspectLine(loc, { note: 'Origine du site (X, Y, Z)', keys: { Coordinates: 'site.position' } }))
-      if (dir !== null) chain.push(inspectLine(dir, { note: 'Orientation (direction X)', keys: { DirectionRatios: 'site.orientation' } }))
+      if (loc !== null) chain.push(inspectLine(loc, { note: 'Position du terrain dans le repère du projet (X, Y, Z)', keys: { Coordinates: 'site.position' } }))
+      if (dir !== null) chain.push(inspectLine(dir, { note: 'Direction de l’axe X du terrain (rotation)', keys: { DirectionRatios: 'site.orientation' } }))
     }
     plId = refId(pl.PlacementRelTo)
   }
-  groups.push(groupOf('Position du site — IfcLocalPlacement', chain))
+  groups.push(groupOf('Position du terrain — IfcSite.ObjectPlacement', chain))
 
-  const ctxIds = api!.GetLineIDsWithType(modelId, WebIFC.IFCGEOMETRICREPRESENTATIONCONTEXT)
-  for (let i = 0; i < ctxIds.size(); i++) {
-    const ctx = lineOf(ctxIds.get(i))
-    if (!ctx?.TrueNorth) continue
-    const tn = refId(ctx.TrueNorth)
-    groups.push(groupOf('Nord vrai — IfcGeometricRepresentationContext', [
-      inspectLine(ctxIds.get(i), { note: 'Contexte géométrique du modèle', keys: { TrueNorth: 'trueNorth' } }),
-      tn === null ? null : inspectLine(tn, { note: 'Direction du Nord vrai', keys: { DirectionRatios: 'trueNorth' } }),
+  const ctx = g?.context ?? null
+  if (ctx) {
+    const ctxLine = lineOf(ctx.stepId)
+    const wcsId = refId(ctxLine?.WorldCoordinateSystem)
+    groups.push(groupOf('Repère du projet et nord — IfcGeometricRepresentationContext', [
+      inspectLine(ctx.stepId, { note: 'Contexte 3D « Model » : WorldCoordinateSystem, TrueNorth', keys: { TrueNorth: 'trueNorth', WorldCoordinateSystem: 'ctx.wcs' } }),
+      ctx.trueNorth.stepId === null ? null : inspectLine(ctx.trueNorth.stepId, { note: 'Direction du nord géographique', keys: { DirectionRatios: 'trueNorth' } }),
+      wcsId === null ? null : inspectLine(wcsId, { note: 'Origine du repère du projet' }),
     ]))
-    break
   }
   return compact(groups)
 }
@@ -1991,13 +1748,26 @@ function relationGroups(chain: number[], relType: GraphRelType): InspectGroup[] 
 }
 
 const GEO_KEY_LABEL: Record<string, string> = {
-  'geo.latitude': 'Latitude', 'geo.longitude': 'Longitude', 'geo.elevation': 'Altitude (RefElevation)',
-  'crs.name': 'Système', 'crs.description': 'Description', 'crs.geodeticDatum': 'Datum géodésique',
-  'crs.verticalDatum': 'Datum vertical', 'crs.mapProjection': 'Projection', 'crs.mapZone': 'Zone', 'crs.mapUnit': 'Unité',
-  'site.position': 'Position du site dans le repère du modèle', 'site.orientation': 'Orientation du site',
-  'site.result': 'Coordonnées du site dans le système projeté',
-  'mc.eastings': 'Eastings (X)', 'mc.northings': 'Northings (Y)', 'mc.orthogonalHeight': 'Hauteur orthogonale (Z)',
-  'mc.rotation': 'Rotation', 'mc.scale': 'Échelle', trueNorth: 'Nord vrai',
+  'geo.latitude': 'Latitude indicative — IfcSite.RefLatitude',
+  'geo.longitude': 'Longitude indicative — IfcSite.RefLongitude',
+  'geo.elevation': 'Altitude indicative — IfcSite.RefElevation',
+  'crs.name': 'Carte — IfcProjectedCRS.Name',
+  'crs.description': 'Description — IfcProjectedCRS.Description',
+  'crs.geodeticDatum': 'Datum géodésique — GeodeticDatum',
+  'crs.verticalDatum': 'Datum vertical — VerticalDatum',
+  'crs.mapProjection': 'Projection — MapProjection',
+  'crs.mapZone': 'Zone — MapZone',
+  'crs.mapUnit': 'Unité de la carte — MapUnit',
+  'site.position': 'Position du terrain — IfcCartesianPoint.Coordinates',
+  'site.orientation': 'Rotation du terrain — IfcAxis2Placement3D.RefDirection',
+  'site.result': 'Position carte du terrain (calculée)',
+  'mc.eastings': 'Est (E) — IfcMapConversion.Eastings',
+  'mc.northings': 'Nord (N) — IfcMapConversion.Northings',
+  'mc.orthogonalHeight': 'Altitude — IfcMapConversion.OrthogonalHeight',
+  'mc.rotation': 'Rotation — XAxisAbscissa, XAxisOrdinate',
+  'mc.scale': 'Échelle — IfcMapConversion.Scale',
+  trueNorth: 'Nord — IfcGeometricRepresentationContext.TrueNorth',
+  'ctx.wcs': 'Origine du repère du projet — WorldCoordinateSystem',
 }
 
 function inspect(request: InspectRequest): InspectResult {
@@ -2010,7 +1780,7 @@ function inspect(request: InspectRequest): InspectResult {
         title: GEO_KEY_LABEL[request.key] ?? request.key,
         subtitle: request.key === 'site.result'
           ? 'Résultat = position du site dans le repère du modèle (IfcLocalPlacement) passée dans la conversion (IfcMapConversion)'
-          : 'Géolocalisation (IfcSite) et géoréférencement (CRS, conversion, placement, Nord vrai)',
+          : 'Sources de géoréférencement du fichier : terrain, carte, conversion, placement, nord',
         focusKey: request.key,
         focusKeys: request.key === 'site.result'
           ? ['site.position', 'mc.eastings', 'mc.northings', 'mc.orthogonalHeight', 'mc.rotation', 'mc.scale']
