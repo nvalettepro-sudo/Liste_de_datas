@@ -107,6 +107,8 @@ interface AppState {
   error: string | null
   entityTypes: EntityTypeSummary[]
   projectInfo: ProjectInfo | null
+  /** Valeur de géoréférencement cliquée : affiche le code IFC source à droite. */
+  geoCodeKey: string | null
   selectedType: string | null
   aggregatedData: AggregatedEntityData | null
   searchQuery: string
@@ -149,6 +151,7 @@ interface AppState {
   loadFile: (file: File) => void
   closeFile: () => void
   selectType: (type: string) => void
+  showGeoCode: (key: string | null) => void
   setSearchQuery: (q: string) => void
   triggerGlobalSearch: () => void
   clearGlobalSearch: () => void
@@ -298,6 +301,7 @@ export const useStore = create<AppState>((set, get) => ({
   error: null,
   entityTypes: [],
   projectInfo: null,
+  geoCodeKey: null,
   selectedType: null,
   aggregatedData: null,
   searchQuery: '',
@@ -342,6 +346,7 @@ export const useStore = create<AppState>((set, get) => ({
       error: null,
       entityTypes: [],
       projectInfo: null,
+      geoCodeKey: null,
       aggregatedData: null,
       selectedType: null,
       globalSearchResults: null,
@@ -380,6 +385,7 @@ export const useStore = create<AppState>((set, get) => ({
       error: null,
       entityTypes: [],
       projectInfo: null,
+      geoCodeKey: null,
       selectedType: null,
       aggregatedData: null,
       searchQuery: '',
@@ -407,10 +413,13 @@ export const useStore = create<AppState>((set, get) => ({
     })
   },
 
+  showGeoCode: (key: string | null) => set({ geoCodeKey: key }),
+
   selectType: (type: string) => {
     if (!worker) return
     set({
       selectedType: type,
+      geoCodeKey: null,
       isLoading: true,
       loadProgress: 0,
       loadPhase: `Agrégation des ${type}…`,

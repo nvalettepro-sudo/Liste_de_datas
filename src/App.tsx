@@ -2,6 +2,7 @@ import { useStore } from './store/useStore'
 import { TopBar } from './components/TopBar'
 import { LeftPanel } from './components/LeftPanel'
 import { InfoPanel } from './components/InfoPanel'
+import { GeoCodePanel } from './components/GeoCodePanel'
 import { FileDropZone } from './components/FileDropZone'
 import { SearchResultsPanel } from './components/SearchResultsPanel'
 import { GraphView } from './components/graph/GraphView'
@@ -15,6 +16,7 @@ export function App() {
   const globalSearchResults = useStore((s) => s.globalSearchResults)
   const graphOpen = useStore((s) => s.graphOpen)
   const graphView = useStore((s) => s.graphView)
+  const geoCodeKey = useStore((s) => s.geoCodeKey)
 
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
@@ -26,7 +28,7 @@ export function App() {
         <div className="w-56 flex-shrink-0 min-h-0">
           <LeftPanel />
         </div>
-        <InfoPanel />
+        {geoCodeKey !== null ? <GeoCodePanel /> : <InfoPanel />}
         {globalSearchResults !== null && <SearchResultsPanel />}
         {graphOpen && (graphView === 'overview' ? <GraphOverview /> : <GraphView />)}
       </div>

@@ -23,6 +23,8 @@ import type {
   StoreyInfo,
   GeoReference,
   GeoLocation,
+  GeoCodeGroup,
+  GeoCodeLine,
   XYZ,
   OwnerHistoryInfo,
   UnitInfo,
@@ -439,6 +441,151 @@ function buildGeoreference(schema: string): GeoReference | null {
   return { crs, mapConversion, sitePosition, projectedPosition, trueNorth }
 }
 
+/* ---------- Code STEP source du géoréférencement ---------- */
+
+/** Une ligne STEP brute (#id=ENTITY(...)) retrouvée par son expressID. */
+function findStepLine(text: string, id: number): string | null {
+  const needle = new RegExp(`#${id}\\s*=`, 'g')
+  let m: RegExpExecArray | null
+  while ((m = needle.exec(text))) {
+    // Doit être en début de ligne (sinon c'est une référence ou du texte).
+    let k = m.index - 1
+    while (k >= 0 && (text[k] === ' ' || text[k] === '\t')) k--
+    if (k >= 0 && text[k] !== '\n' && text[k] !== '\r') continue
+    let inStr = false
+    for (let i = m.index; i < text.length; i++) {
+      const c = text[i]
+      if (c === "'") inStr = !inStr
+      else if (c === ';' && !inStr) return text.slice(m.index, i + 1).replace(/\s*[\r\n]+\s*/g, ' ')
+    }
+    return null
+  }
+  return null
+}
+
+/** Découpe « #id=ENTITY(a,b,(c,d),'e');» en arguments de premier niveau. */
+function splitStepLine(line: string): { head: string; args: string[] } | null {
+  const open = line.indexOf('(')
+  const close = line.lastIndexOf(')')
+  if (open < 0 || close < open) return null
+  const body = line.slice(open + 1, close)
+  const args: string[] = []
+  let depth = 0
+  let inStr = false
+  let start = 0
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]
+    if (c === "'") inStr = !inStr
+    else if (inStr) continue
+    else if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (c === ',' && depth === 0) {
+      args.push(body.slice(start, i))
+      start = i + 1
+    }
+  }
+  args.push(body.slice(start))
+  return { head: line.slice(0, open), args }
+}
+
+function refId(raw: unknown): number | null {
+  const r = raw as Record<string, unknown> | undefined
+  return r && typeof r.value === 'number' ? (r.value as number) : null
+}
+
+/**
+ * Lignes du fichier IFC qui portent la géolocalisation et le géoréférencement,
+ * avec, pour chaque argument concerné, la clé de la valeur affichée dans
+ * l'onglet Infos projet — l'interface s'en sert pour colorer ces valeurs.
+ */
+function buildGeoCode(buffer: ArrayBuffer): GeoCodeGroup[] {
+  if (!api) return []
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buffer))
+  const groups: GeoCodeGroup[] = []
+  const seen = new Set<number>()
+
+  const line = (id: number | null, keys: Record<number, string>, note: string): GeoCodeLine | null => {
+    if (id === null || seen.has(id)) return null
+    const raw = findStepLine(text, id)
+    const parts = raw ? splitStepLine(raw) : null
+    if (!parts) return null
+    seen.add(id)
+    return { id, head: parts.head, args: parts.args.map((t, i) => ({ text: t, key: keys[i] })), note }
+  }
+  const push = (title: string, lines: (GeoCodeLine | null)[]) => {
+    const ok = lines.filter((l): l is GeoCodeLine => l !== null)
+    if (ok.length) groups.push({ title, lines: ok })
+  }
+
+  const first = (type: number) => {
+    const ids = api!.GetLineIDsWithType(modelId, type)
+    return ids.size() > 0 ? ids.get(0) : null
+  }
+
+  // Géolocalisation : IfcSite (RefLatitude, RefLongitude, RefElevation = 10e à 12e arguments).
+  const siteId = first(WebIFC.IFCSITE)
+  const site = siteId !== null ? (api.GetLine(modelId, siteId, false) as Record<string, unknown>) : null
+  push('Géolocalisation — IfcSite', [
+    line(siteId, { 9: 'geo.latitude', 10: 'geo.longitude', 11: 'geo.elevation', 5: 'site.position' }, 'Site : latitude, longitude, altitude de référence'),
+  ])
+
+  // Système de coordonnées et conversion (IFC4+).
+  let mcId: number | null = null
+  let crsId: number | null = null
+  try { mcId = first(WebIFC.IFCMAPCONVERSION) } catch { /* schéma sans l'entité */ }
+  if (mcId !== null) {
+    crsId = refId((api.GetLine(modelId, mcId, false) as Record<string, unknown>).TargetCRS)
+  } else {
+    try { crsId = first(WebIFC.IFCPROJECTEDCRS) } catch { /* idem */ }
+  }
+  const crs = crsId !== null ? (api.GetLine(modelId, crsId, false) as Record<string, unknown>) : null
+  const unitId = crs ? refId(crs.MapUnit) : null
+  push('Système de coordonnées — IfcProjectedCRS', [
+    line(crsId, {
+      0: 'crs.name', 1: 'crs.description', 2: 'crs.geodeticDatum', 3: 'crs.verticalDatum',
+      4: 'crs.mapProjection', 5: 'crs.mapZone', 6: 'crs.mapUnit',
+    }, 'Nom, description, datum géodésique, datum vertical, projection, zone, unité'),
+    line(unitId, { 2: 'crs.mapUnit', 3: 'crs.mapUnit' }, 'Unité du système de coordonnées'),
+  ])
+  push('Conversion — IfcMapConversion', [
+    line(mcId, {
+      2: 'mc.eastings', 3: 'mc.northings', 4: 'mc.orthogonalHeight',
+      5: 'mc.rotation', 6: 'mc.rotation', 7: 'mc.scale',
+    }, 'Eastings, Northings, OrthogonalHeight, XAxisAbscissa, XAxisOrdinate, Scale'),
+  ])
+
+  // Position du site : chaîne IfcLocalPlacement → IfcAxis2Placement3D → IfcCartesianPoint.
+  const chain: (GeoCodeLine | null)[] = []
+  let plId = site ? refId(site.ObjectPlacement) : null
+  for (let depth = 0; plId !== null && depth < 32; depth++) {
+    const pl = api.GetLine(modelId, plId, false) as Record<string, unknown>
+    chain.push(line(plId, {}, depth === 0 ? 'Placement du site' : 'Placement parent'))
+    const axId = refId(pl.RelativePlacement)
+    if (axId !== null) {
+      const ax = api.GetLine(modelId, axId, false) as Record<string, unknown>
+      chain.push(line(axId, {}, 'Repère : origine, axe Z, direction X'))
+      chain.push(line(refId(ax.Location), { 0: 'site.position' }, 'Origine du site (X, Y, Z)'))
+      chain.push(line(refId(ax.RefDirection), { 0: 'site.orientation' }, 'Orientation (direction X)'))
+    }
+    plId = refId(pl.PlacementRelTo)
+  }
+  push('Position du site — IfcLocalPlacement', chain)
+
+  // Nord vrai : IfcGeometricRepresentationContext.TrueNorth (6e argument).
+  const ctxIds = api.GetLineIDsWithType(modelId, WebIFC.IFCGEOMETRICREPRESENTATIONCONTEXT)
+  for (let i = 0; i < ctxIds.size(); i++) {
+    const ctx = api.GetLine(modelId, ctxIds.get(i), false) as Record<string, unknown>
+    if (!ctx?.TrueNorth) continue
+    push('Nord vrai — IfcGeometricRepresentationContext', [
+      line(ctxIds.get(i), { 5: 'trueNorth' }, 'Contexte géométrique du modèle'),
+      line(refId(ctx.TrueNorth), { 0: 'trueNorth' }, 'Direction du Nord vrai'),
+    ])
+    break
+  }
+
+  return groups
+}
+
 function buildOwnerHistory(): OwnerHistoryInfo | null {
   if (!api) return null
   const ids = api.GetLineIDsWithType(modelId, WebIFC.IFCOWNERHISTORY)
@@ -529,6 +676,7 @@ function buildProjectInfo(buffer: ArrayBuffer, schema: string): ProjectInfo {
     storeys: buildStoreys(),
     georeference: buildGeoreference(schema),
     geolocation: buildGeolocation(),
+    geoCode: buildGeoCode(buffer),
     ownerHistory: buildOwnerHistory(),
     units: buildUnits(),
   }

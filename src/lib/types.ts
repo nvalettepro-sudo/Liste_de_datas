@@ -226,6 +226,20 @@ export interface GeoLocation {
   elevation: number | null
 }
 
+/** Ligne STEP brute, découpée en arguments ; `key` relie un argument à une valeur de l'onglet Infos projet. */
+export interface GeoCodeLine {
+  id: number
+  /** « #70=IFCCARTESIANPOINT » */
+  head: string
+  args: { text: string; key?: string }[]
+  note: string
+}
+
+export interface GeoCodeGroup {
+  title: string
+  lines: GeoCodeLine[]
+}
+
 export interface OwnerHistoryInfo {
   creationDate: string | null
   lastModifiedDate: string | null
@@ -249,6 +263,8 @@ export interface ProjectInfo {
   storeys: StoreyInfo[]
   georeference: GeoReference | null
   geolocation: GeoLocation | null
+  /** Code IFC source de la géolocalisation et du géoréférencement. */
+  geoCode: GeoCodeGroup[]
   ownerHistory: OwnerHistoryInfo | null
   units: UnitInfo[]
 }
