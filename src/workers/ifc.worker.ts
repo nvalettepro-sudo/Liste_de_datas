@@ -22,6 +22,8 @@ import type {
   ProjectInfo,
   StoreyInfo,
   GeoReference,
+  GeoLocation,
+  XYZ,
   OwnerHistoryInfo,
   UnitInfo,
 } from '../lib/types'
@@ -213,14 +215,24 @@ function numOf(raw: unknown): number | null {
  * plutôt qu'un tableau nu (contrairement aux mesures simples déjà gérées par
  * valueToString), d'où le déballage explicite ici.
  */
-function compoundAngleToDecimal(raw: unknown): number | null {
+function compoundAngleParts(raw: unknown): number[] | null {
   const wrapped = raw as Record<string, unknown> | undefined
   const list = Array.isArray(raw) ? raw : Array.isArray(wrapped?.value) ? wrapped!.value : null
   if (!Array.isArray(list) || list.length === 0) return null
-  const parts = list.map((v) => numOf(v) ?? 0)
+  return list.map((v) => numOf(v) ?? 0)
+}
+
+function compoundAngleToDecimal(parts: number[]): number {
   const [deg, min = 0, sec = 0, micro = 0] = parts
   const sign = deg < 0 ? -1 : 1
   return sign * (Math.abs(deg) + min / 60 + sec / 3600 + micro / 3_600_000_000)
+}
+
+/** Même présentation que Solibri : 48°49'24,826450" */
+function compoundAngleToDms(parts: number[]): string {
+  const [deg, min = 0, sec = 0, micro = 0] = parts
+  const seconds = (Math.abs(sec) + Math.abs(micro) / 1_000_000).toFixed(6).replace('.', ',')
+  return `${deg}°${Math.abs(min)}'${seconds}"`
 }
 
 /**
@@ -253,51 +265,178 @@ function buildStoreys(): StoreyInfo[] {
   return storeys
 }
 
+type Vec3 = [number, number, number]
+interface Frame { o: Vec3; x: Vec3; y: Vec3; z: Vec3 }
+
+function vecOf(raw: unknown, fallback: Vec3): Vec3 {
+  const line = resolveRef(raw)
+  const list = (line?.Coordinates ?? line?.DirectionRatios) as unknown
+  const wrapped = list as Record<string, unknown> | undefined
+  const arr = Array.isArray(list) ? list : Array.isArray(wrapped?.value) ? (wrapped!.value as unknown[]) : null
+  if (!arr) return fallback
+  const n = arr.map((v) => numOf(v) ?? 0)
+  return [n[0] ?? 0, n[1] ?? 0, n[2] ?? 0]
+}
+
+const norm = (v: Vec3): Vec3 => {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1
+  return [v[0] / l, v[1] / l, v[2] / l]
+}
+const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+const cross = (a: Vec3, b: Vec3): Vec3 => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+]
+
+/** IfcAxis2Placement3D → repère orthonormé (Z = Axis, X = RefDirection orthogonalisée). */
+function frameOfAxis2Placement(ref: unknown): Frame {
+  const line = resolveRef(ref)
+  const o = line ? vecOf(line.Location, [0, 0, 0]) : ([0, 0, 0] as Vec3)
+  const z = norm(line ? vecOf(line.Axis, [0, 0, 1]) : [0, 0, 1])
+  let x = line ? vecOf(line.RefDirection, [1, 0, 0]) : ([1, 0, 0] as Vec3)
+  const d = dot(x, z)
+  x = norm([x[0] - d * z[0], x[1] - d * z[1], x[2] - d * z[2]])
+  return { o, x, y: cross(z, x), z }
+}
+
+/** Compose la chaîne IfcLocalPlacement (PlacementRelTo) jusqu'au repère du modèle. */
+function absolutePlacement(placementRef: unknown, depth = 0): Frame | null {
+  const pl = resolveRef(placementRef)
+  if (!pl || depth > 32) return null
+  const local = frameOfAxis2Placement(pl.RelativePlacement)
+  const parent = pl.PlacementRelTo ? absolutePlacement(pl.PlacementRelTo, depth + 1) : null
+  if (!parent) return local
+  const apply = (v: Vec3): Vec3 => [
+    parent.x[0] * v[0] + parent.y[0] * v[1] + parent.z[0] * v[2],
+    parent.x[1] * v[0] + parent.y[1] * v[1] + parent.z[1] * v[2],
+    parent.x[2] * v[0] + parent.y[2] * v[1] + parent.z[2] * v[2],
+  ]
+  const po = apply(local.o)
+  return {
+    o: [parent.o[0] + po[0], parent.o[1] + po[1], parent.o[2] + po[2]],
+    x: apply(local.x),
+    y: apply(local.y),
+    z: apply(local.z),
+  }
+}
+
+function unitSymbol(line: Record<string, unknown>): string {
+  const name = safeStr(line.Name) ?? ''
+  const prefix = safeStr(line.Prefix)
+  if (!prefix && !SI_UNIT_SYMBOL[name] && line.ConversionFactor !== undefined) return name
+  return (prefix ? SI_PREFIX_SYMBOL[prefix] ?? prefix : '') + (SI_UNIT_SYMBOL[name] ?? name.toLowerCase())
+}
+
 /**
- * Géoréférencement : IfcSite porte les coordonnées WGS84 dans toutes les
- * versions ; IfcMapConversion/IfcProjectedCRS (conversion vers un système
- * projeté) n'existe qu'à partir d'IFC4.
+ * GÉOLOCALISATION — latitude/longitude de l'IfcSite (toutes versions IFC).
+ */
+function buildGeolocation(): GeoLocation | null {
+  if (!api) return null
+  const siteIds = api.GetLineIDsWithType(modelId, WebIFC.IFCSITE)
+  if (siteIds.size() === 0) return null
+  const site = api.GetLine(modelId, siteIds.get(0), false) as Record<string, unknown>
+  const lat = compoundAngleParts(site.RefLatitude)
+  const lon = compoundAngleParts(site.RefLongitude)
+  const elevation = numOf(site.RefElevation)
+  if (!lat && !lon && elevation === null) return null
+  return {
+    latitude: lat ? compoundAngleToDecimal(lat) : null,
+    longitude: lon ? compoundAngleToDecimal(lon) : null,
+    latitudeDms: lat ? compoundAngleToDms(lat) : null,
+    longitudeDms: lon ? compoundAngleToDms(lon) : null,
+    elevation,
+  }
+}
+
+/**
+ * GÉORÉFÉRENCEMENT — repère de coordonnées projetées : IfcProjectedCRS +
+ * IfcMapConversion (IFC4+ uniquement), position X/Y/Z de l'IfcSite obtenue en
+ * composant sa chaîne d'IfcLocalPlacement (valable dans toutes les versions —
+ * c'est là que Revit/Solibri lisent les « coordonnées globales »), et Nord vrai.
  */
 function buildGeoreference(schema: string): GeoReference | null {
   if (!api) return null
 
-  let latitude: number | null = null
-  let longitude: number | null = null
-  let elevation: number | null = null
-  const siteIds = api.GetLineIDsWithType(modelId, WebIFC.IFCSITE)
-  if (siteIds.size() > 0) {
-    const site = api.GetLine(modelId, siteIds.get(0), false) as Record<string, unknown>
-    latitude = compoundAngleToDecimal(site.RefLatitude)
-    longitude = compoundAngleToDecimal(site.RefLongitude)
-    elevation = numOf(site.RefElevation)
-  }
-
+  let crs: GeoReference['crs'] = null
   let mapConversion: GeoReference['mapConversion'] = null
   if (schema !== 'IFC2X3') {
     const mcIds = api.GetLineIDsWithType(modelId, WebIFC.IFCMAPCONVERSION)
     if (mcIds.size() > 0) {
       const mc = api.GetLine(modelId, mcIds.get(0), false) as Record<string, unknown>
-      const xAbs = numOf(mc.XAxisAbscissa)
-      const xOrd = numOf(mc.XAxisOrdinate)
-      const crs = resolveRef(mc.TargetCRS)
+      const xAbs = numOf(mc.XAxisAbscissa) ?? 1
+      const xOrd = numOf(mc.XAxisOrdinate) ?? 0
       mapConversion = {
         eastings: numOf(mc.Eastings),
         northings: numOf(mc.Northings),
         orthogonalHeight: numOf(mc.OrthogonalHeight),
-        rotation: xAbs !== null && xOrd !== null ? (Math.atan2(xOrd, xAbs) * 180) / Math.PI : null,
-        scale: numOf(mc.Scale),
-        crsName: crs ? safeStr(crs.Name) : null,
-        crsDescription: crs ? safeStr(crs.Description) : null,
-        geodeticDatum: crs ? safeStr(crs.GeodeticDatum) : null,
-        verticalDatum: crs ? safeStr(crs.VerticalDatum) : null,
-        mapProjection: crs ? safeStr(crs.MapProjection) : null,
-        mapZone: crs ? safeStr(crs.MapZone) : null,
+        rotation: (Math.atan2(xOrd, xAbs) * 180) / Math.PI,
+        scale: numOf(mc.Scale) ?? 1,
+      }
+      const t = resolveRef(mc.TargetCRS)
+      if (t) {
+        const unit = resolveRef(t.MapUnit)
+        crs = {
+          name: safeStr(t.Name),
+          description: safeStr(t.Description),
+          geodeticDatum: safeStr(t.GeodeticDatum),
+          verticalDatum: safeStr(t.VerticalDatum),
+          mapProjection: safeStr(t.MapProjection),
+          mapZone: safeStr(t.MapZone),
+          mapUnit: unit ? unitSymbol(unit) : null,
+        }
+      }
+    } else {
+      // IfcProjectedCRS déclaré sans IfcMapConversion : on garde le système.
+      const crsIds = api.GetLineIDsWithType(modelId, WebIFC.IFCPROJECTEDCRS)
+      if (crsIds.size() > 0) {
+        const t = api.GetLine(modelId, crsIds.get(0), false) as Record<string, unknown>
+        const unit = resolveRef(t.MapUnit)
+        crs = {
+          name: safeStr(t.Name),
+          description: safeStr(t.Description),
+          geodeticDatum: safeStr(t.GeodeticDatum),
+          verticalDatum: safeStr(t.VerticalDatum),
+          mapProjection: safeStr(t.MapProjection),
+          mapZone: safeStr(t.MapZone),
+          mapUnit: unit ? unitSymbol(unit) : null,
+        }
       }
     }
   }
 
-  if (latitude === null && longitude === null && !mapConversion) return null
-  return { latitude, longitude, elevation, mapConversion }
+  let sitePosition: XYZ | null = null
+  const siteIds = api.GetLineIDsWithType(modelId, WebIFC.IFCSITE)
+  if (siteIds.size() > 0) {
+    const site = api.GetLine(modelId, siteIds.get(0), false) as Record<string, unknown>
+    const frame = site.ObjectPlacement ? absolutePlacement(site.ObjectPlacement) : null
+    if (frame) sitePosition = { x: frame.o[0], y: frame.o[1], z: frame.o[2] }
+  }
+
+  let projectedPosition: XYZ | null = null
+  if (sitePosition && mapConversion) {
+    const a = Math.cos((mapConversion.rotation! * Math.PI) / 180)
+    const b = Math.sin((mapConversion.rotation! * Math.PI) / 180)
+    const sc = mapConversion.scale ?? 1
+    projectedPosition = {
+      x: (mapConversion.eastings ?? 0) + sc * (a * sitePosition.x - b * sitePosition.y),
+      y: (mapConversion.northings ?? 0) + sc * (b * sitePosition.x + a * sitePosition.y),
+      z: (mapConversion.orthogonalHeight ?? 0) + sitePosition.z,
+    }
+  }
+
+  let trueNorth: number | null = null
+  const ctxIds = api.GetLineIDsWithType(modelId, WebIFC.IFCGEOMETRICREPRESENTATIONCONTEXT)
+  for (let i = 0; i < ctxIds.size() && trueNorth === null; i++) {
+    const ctx = api.GetLine(modelId, ctxIds.get(i), false) as Record<string, unknown>
+    if (!ctx?.TrueNorth) continue
+    const d = vecOf(ctx.TrueNorth, [0, 1, 0])
+    // Angle par rapport à l'axe Y, positif vers l'ouest (convention IFC : direction du Nord).
+    trueNorth = (Math.atan2(-d[0], d[1]) * 180) / Math.PI
+  }
+
+  if (!crs && !mapConversion && !sitePosition && trueNorth === null) return null
+  return { crs, mapConversion, sitePosition, projectedPosition, trueNorth }
 }
 
 function buildOwnerHistory(): OwnerHistoryInfo | null {
@@ -389,6 +528,7 @@ function buildProjectInfo(buffer: ArrayBuffer, schema: string): ProjectInfo {
     buildingName: null,
     storeys: buildStoreys(),
     georeference: buildGeoreference(schema),
+    geolocation: buildGeolocation(),
     ownerHistory: buildOwnerHistory(),
     units: buildUnits(),
   }
